@@ -1,0 +1,13 @@
+**/bin/
+**/obj/
+/packages/
+riderModule.iml
+*.sln.DotSettings.user
+/_ReSharper.Caches/
+.roxy/
+out/
+intermediate/
+artifacts/
+packages.lock.json
+TestResults/
+.idea/

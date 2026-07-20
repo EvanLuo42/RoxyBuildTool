@@ -1,0 +1,12 @@
+[
+  {
+    "directory": ".",
+    "file": "src/mini.cpp",
+    "arguments": [
+      "cl.exe",
+      "/c",
+      "src/mini.cpp"
+    ],
+    "output": "intermediate/mini.obj"
+  }
+]

@@ -1,0 +1,20 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/RoxyBuildTool.Abstractions/RoxyBuildTool.Abstractions.csproj" />
+    <Project Path="src/RoxyBuildTool.Model/RoxyBuildTool.Model.csproj" />
+    <Project Path="src/RoxyBuildTool.Configuration/RoxyBuildTool.Configuration.csproj" />
+    <Project Path="src/RoxyBuildTool.Graph/RoxyBuildTool.Graph.csproj" />
+    <Project Path="src/RoxyBuildTool.Toolchains/RoxyBuildTool.Toolchains.csproj" />
+    <Project Path="src/RoxyBuildTool.Platforms.Windows/RoxyBuildTool.Platforms.Windows.csproj" />
+    <Project Path="src/RoxyBuildTool.Generators.VisualStudio/RoxyBuildTool.Generators.VisualStudio.csproj" />
+    <Project Path="src/RoxyBuildTool.Generators.CompilationDatabase/RoxyBuildTool.Generators.CompilationDatabase.csproj" />
+    <Project Path="src/RoxyBuildTool.CommandLine/RoxyBuildTool.CommandLine.csproj" />
+    <Project Path="src/RoxyBuildTool/RoxyBuildTool.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/RoxyBuildTool.Configuration.Tests/RoxyBuildTool.Configuration.Tests.csproj" />
+    <Project Path="tests/RoxyBuildTool.Graph.Tests/RoxyBuildTool.Graph.Tests.csproj" />
+    <Project Path="tests/RoxyBuildTool.BackendGoldenTests/RoxyBuildTool.BackendGoldenTests.csproj" />
+    <Project Path="tests/RoxyBuildTool.IntegrationTests/RoxyBuildTool.IntegrationTests.csproj" />
+  </Folder>
+</Solution>

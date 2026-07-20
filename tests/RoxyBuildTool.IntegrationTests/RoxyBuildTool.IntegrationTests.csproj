@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <PackageReference Include="xunit.v3.mtp-v2" />
+    <ProjectReference Include="../../src/RoxyBuildTool/RoxyBuildTool.csproj" />
+    <ProjectReference Include="../../src/RoxyBuildTool.Platforms.Windows/RoxyBuildTool.Platforms.Windows.csproj" />
+    <ProjectReference Include="../../src/RoxyBuildTool.Generators.VisualStudio/RoxyBuildTool.Generators.VisualStudio.csproj" />
+    <ProjectReference Include="../../src/RoxyBuildTool.Generators.CompilationDatabase/RoxyBuildTool.Generators.CompilationDatabase.csproj" />
+  </ItemGroup>
+</Project>

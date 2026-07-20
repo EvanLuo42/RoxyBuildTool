@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>Windows x64 and MSVC platform plugin for RoxyBuildTool.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../RoxyBuildTool.Abstractions/RoxyBuildTool.Abstractions.csproj" />
+    <ProjectReference Include="../RoxyBuildTool.Model/RoxyBuildTool.Model.csproj" />
+    <ProjectReference Include="../RoxyBuildTool.Toolchains/RoxyBuildTool.Toolchains.csproj" />
+  </ItemGroup>
+</Project>

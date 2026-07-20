@@ -1,0 +1,19 @@
+<Project>
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageVersion Include="xunit.v3.mtp-v2" Version="3.2.2" />
+    <PackageVersion Include="RoxyBuildTool" Version="0.1.0" />
+    <PackageVersion Include="RoxyBuildTool.Abstractions" Version="0.1.0" />
+    <PackageVersion Include="RoxyBuildTool.Model" Version="0.1.0" />
+    <PackageVersion Include="RoxyBuildTool.Configuration" Version="0.1.0" />
+    <PackageVersion Include="RoxyBuildTool.Graph" Version="0.1.0" />
+    <PackageVersion Include="RoxyBuildTool.Toolchains" Version="0.1.0" />
+    <PackageVersion Include="RoxyBuildTool.CommandLine" Version="0.1.0" />
+    <PackageVersion Include="RoxyBuildTool.Platforms.Windows" Version="0.1.0" />
+    <PackageVersion Include="RoxyBuildTool.Generators.VisualStudio" Version="0.1.0" />
+    <PackageVersion Include="RoxyBuildTool.Generators.CompilationDatabase" Version="0.1.0" />
+  </ItemGroup>
+</Project>

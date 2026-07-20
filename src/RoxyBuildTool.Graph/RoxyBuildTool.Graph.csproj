@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>Dependency resolution and action graph lowering for RoxyBuildTool.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../RoxyBuildTool.Abstractions/RoxyBuildTool.Abstractions.csproj" />
+    <ProjectReference Include="../RoxyBuildTool.Model/RoxyBuildTool.Model.csproj" />
+    <ProjectReference Include="../RoxyBuildTool.Configuration/RoxyBuildTool.Configuration.csproj" />
+    <ProjectReference Include="../RoxyBuildTool.Toolchains/RoxyBuildTool.Toolchains.csproj" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>Stable identifiers and plugin contracts for RoxyBuildTool.</Description>
+  </PropertyGroup>
+</Project>

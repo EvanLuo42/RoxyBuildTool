@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>Command-line parsing contracts for the in-process RoxyBuildTool host.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../RoxyBuildTool.Abstractions/RoxyBuildTool.Abstractions.csproj" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>Immutable build, action, and workspace models for RoxyBuildTool.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../RoxyBuildTool.Abstractions/RoxyBuildTool.Abstractions.csproj" />
+  </ItemGroup>
+</Project>

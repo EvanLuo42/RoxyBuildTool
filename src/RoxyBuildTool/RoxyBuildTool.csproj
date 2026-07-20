@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>Strongly typed in-process build description compiler and host.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../RoxyBuildTool.Abstractions/RoxyBuildTool.Abstractions.csproj" />
+    <ProjectReference Include="../RoxyBuildTool.Model/RoxyBuildTool.Model.csproj" />
+    <ProjectReference Include="../RoxyBuildTool.Configuration/RoxyBuildTool.Configuration.csproj" />
+    <ProjectReference Include="../RoxyBuildTool.Graph/RoxyBuildTool.Graph.csproj" />
+    <ProjectReference Include="../RoxyBuildTool.Toolchains/RoxyBuildTool.Toolchains.csproj" />
+    <ProjectReference Include="../RoxyBuildTool.CommandLine/RoxyBuildTool.CommandLine.csproj" />
+  </ItemGroup>
+</Project>

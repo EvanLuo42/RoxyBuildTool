@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>compile_commands.json generator for RoxyBuildTool.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../RoxyBuildTool.Abstractions/RoxyBuildTool.Abstractions.csproj" />
+    <ProjectReference Include="../RoxyBuildTool.Model/RoxyBuildTool.Model.csproj" />
+  </ItemGroup>
+</Project>

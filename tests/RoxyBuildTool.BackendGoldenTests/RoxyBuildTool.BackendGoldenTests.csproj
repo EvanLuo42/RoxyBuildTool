@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <PackageReference Include="xunit.v3.mtp-v2" />
+    <ProjectReference Include="../../src/RoxyBuildTool.Generators.VisualStudio/RoxyBuildTool.Generators.VisualStudio.csproj" />
+    <ProjectReference Include="../../src/RoxyBuildTool.Generators.CompilationDatabase/RoxyBuildTool.Generators.CompilationDatabase.csproj" />
+    <ProjectReference Include="../../src/RoxyBuildTool.Graph/RoxyBuildTool.Graph.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="Golden/**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>
