@@ -95,17 +95,28 @@ public sealed record ConfigurationKey : IComparable<ConfigurationKey>
 
         Values = ordered;
         Canonical = string.Join(';', ordered);
+        ShortHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(Canonical)))[..12]
+            .ToLowerInvariant();
     }
 
     public ImmutableArray<FragmentValue> Values { get; }
     public string Canonical { get; }
 
-    public string ShortHash =>
-        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(Canonical)))[..12].ToLowerInvariant();
+    public string ShortHash { get; }
 
     public int CompareTo(ConfigurationKey? other)
     {
         return other is null ? 1 : StringComparer.Ordinal.Compare(Canonical, other.Canonical);
+    }
+
+    public bool Equals(ConfigurationKey? other)
+    {
+        return other is not null && Canonical.Equals(other.Canonical, StringComparison.Ordinal);
+    }
+
+    public override int GetHashCode()
+    {
+        return StringComparer.Ordinal.GetHashCode(Canonical);
     }
 
     /// <summary>Attempts to get the assignment for <paramref name="fragment"/>.</summary>
@@ -150,6 +161,84 @@ public sealed record ConfigurationKey : IComparable<ConfigurationKey>
     public override string ToString() => Canonical;
 }
 
+/// <summary>Builds configuration-isolated logical paths shared by graph lowering and generators.</summary>
+public static class BuildPathLayout
+{
+    public static string OutputRoot(ConfigurationKey configuration, string target)
+    {
+        var platform = Fragment(configuration, "Platform").ToLowerInvariant();
+        var architecture = Fragment(configuration, "Architecture").ToLowerInvariant();
+        var profile = Fragment(configuration, "Profile").ToLowerInvariant();
+        return $"out/{platform}/{architecture}/{profile}/{configuration.ShortHash}/{target}";
+    }
+
+    public static string IntermediateRoot(ConfigurationKey configuration, string target)
+    {
+        return $"intermediate/{configuration.ShortHash}/{target}";
+    }
+
+    public static string ObjectFile(
+        ConfigurationKey configuration,
+        string target,
+        string module,
+        LogicalPath source)
+    {
+        return $"{IntermediateRoot(configuration, target)}/{module}/{SanitizedStem(source)}-" +
+               $"{StableToken(source.Value)}.obj";
+    }
+
+    public static string ResourceFile(
+        ConfigurationKey configuration,
+        string target,
+        string module,
+        LogicalPath source)
+    {
+        return $"{IntermediateRoot(configuration, target)}/{module}/{SanitizedStem(source)}-" +
+               $"{StableToken(source.Value)}.res";
+    }
+
+    public static string StableToken(string value, int length = 12)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(length);
+        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
+        return length <= hash.Length ? hash[..length] : throw new ArgumentOutOfRangeException(nameof(length));
+    }
+
+    private static string Fragment(ConfigurationKey configuration, string fragment)
+    {
+        return configuration.Values.Single(value => value.Fragment.Value == fragment).Value;
+    }
+
+    private static string SanitizedStem(LogicalPath source)
+    {
+        var stem = Path.GetFileNameWithoutExtension(source.Value);
+        var sanitized = new string(stem.Where(character => char.IsAsciiLetterOrDigit(character) || character == '_')
+            .ToArray());
+        return sanitized.Length == 0 ? "source" : sanitized;
+    }
+}
+
+/// <summary>Creates stable, readable configuration names for workspaces and build invocations.</summary>
+public static class BuildConfigurationNames
+{
+    public static string DisplayName(ConfigurationKey configuration)
+    {
+        var profile = configuration.Values.Single(value => value.Fragment.Value == "Profile").Value;
+        var custom = configuration.Values
+            .Where(value => value.Fragment.Value is not
+                ("Platform" or "Architecture" or "Profile" or "Toolchain" or "LinkModel"))
+            .Select(value => ToPascalCase(value.Value));
+        return $"{string.Join(' ', new[] { ToPascalCase(profile) }.Concat(custom))}-{configuration.ShortHash}";
+    }
+
+    private static string ToPascalCase(string value)
+    {
+        return string.Concat(value
+            .Split(['-', '_', '.'], StringSplitOptions.RemoveEmptyEntries)
+            .Select(segment => char.ToUpperInvariant(segment[0]) + segment[1..]));
+    }
+}
+
 /// <summary>Represents a normalized, workspace-relative path.</summary>
 public readonly record struct LogicalPath
 {
@@ -163,23 +252,46 @@ public readonly record struct LogicalPath
             return;
         }
 
-        var normalized = value.Replace('\\', '/').TrimStart('/');
-        while (normalized.StartsWith("./", StringComparison.Ordinal))
-        {
-            normalized = normalized[2..];
-        }
-
-        if (Path.IsPathRooted(value) || normalized.Split('/').Contains("..", StringComparer.Ordinal))
+        var normalized = value.Replace('\\', '/');
+        var segments = normalized.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (Path.IsPathRooted(value) || segments.Contains("..", StringComparer.Ordinal))
         {
             throw new ArgumentException($"Logical path '{value}' must be workspace-relative.", nameof(value));
         }
 
-        Value = normalized;
+        Value = string.Join('/', segments.Where(segment => segment != "."));
+        if (Value.Length == 0)
+            Value = ".";
     }
 
     public string Value { get; }
     public string FileName => Path.GetFileName(Value);
     public override string ToString() => Value;
+}
+
+/// <summary>Classifies source files consistently across action and workspace generators.</summary>
+public static class BuildFileKinds
+{
+    private static readonly ImmutableHashSet<string> CxxSourceExtensions =
+        ImmutableHashSet.Create(StringComparer.OrdinalIgnoreCase, ".c", ".cc", ".cpp", ".cxx", ".m", ".mm");
+
+    private static readonly ImmutableHashSet<string> HeaderExtensions =
+        ImmutableHashSet.Create(StringComparer.OrdinalIgnoreCase, ".h", ".hh", ".hpp", ".hxx", ".inl", ".inc");
+
+    public static bool IsCxxSource(string path)
+    {
+        return CxxSourceExtensions.Contains(Path.GetExtension(path));
+    }
+
+    public static bool IsHeader(string path)
+    {
+        return HeaderExtensions.Contains(Path.GetExtension(path));
+    }
+
+    public static bool IsResource(string path)
+    {
+        return Path.GetExtension(path).Equals(".rc", StringComparison.OrdinalIgnoreCase);
+    }
 }
 
 /// <summary>Identifies the implementation language of a configured module.</summary>
@@ -281,6 +393,7 @@ public sealed record ConfiguredGraph(
 public enum ArtifactKind
 {
     ObjectFile,
+    ResourceFile,
     StaticLibrary,
     ImportLibrary,
     SharedLibrary,
@@ -297,6 +410,7 @@ public sealed record BuildArtifact(string Id, ArtifactKind Kind, LogicalPath Pat
 public enum BuildActionKind
 {
     Compile,
+    ResourceCompile,
     Archive,
     Link,
     Copy,
@@ -359,6 +473,11 @@ public sealed record ActionGraph(
         var diagnostics = ImmutableArray.CreateBuilder<Diagnostic>();
         var ids = Actions.Select(action => action.Id).ToHashSet(StringComparer.Ordinal);
 
+        foreach (var duplicate in Actions.GroupBy(action => action.Id, StringComparer.Ordinal)
+                     .Where(group => group.Count() > 1))
+            diagnostics.Add(new Diagnostic("RBT3001", DiagnosticSeverity.Error,
+                $"Action ID '{duplicate.Key}' is declared {duplicate.Count()} times."));
+
         foreach (var duplicate in Actions.SelectMany(action => action.Outputs.Select(output => (output, action.Id)))
                      .GroupBy(pair => pair.output, StringComparer.Ordinal).Where(group => group.Count() > 1))
         {
@@ -368,6 +487,20 @@ public sealed record ActionGraph(
 
         foreach (var action in Actions)
         {
+            foreach (var output in action.Outputs)
+                try
+                {
+                    var logical = new LogicalPath(output);
+                    if (logical.Value != output)
+                        diagnostics.Add(new Diagnostic("RBT3009", DiagnosticSeverity.Error,
+                            $"Action '{action.Id}' output '{output}' is not a canonical logical path; use '{logical.Value}'."));
+                }
+                catch (ArgumentException)
+                {
+                    diagnostics.Add(new Diagnostic("RBT3009", DiagnosticSeverity.Error,
+                        $"Action '{action.Id}' output '{output}' is not a workspace-relative logical path."));
+                }
+
             foreach (var dependency in action.Dependencies.Where(dependency => !ids.Contains(dependency)))
             {
                 diagnostics.Add(new Diagnostic("RBT3003", DiagnosticSeverity.Error,
@@ -375,7 +508,55 @@ public sealed record ActionGraph(
             }
         }
 
+        ValidateCycles();
+
+        var actionsById = Actions.GroupBy(action => action.Id, StringComparer.Ordinal)
+            .Where(group => group.Count() == 1)
+            .ToDictionary(group => group.Key, group => group.Single(), StringComparer.Ordinal);
+        foreach (var artifact in Artifacts)
+            if (!actionsById.TryGetValue(artifact.ProducerAction, out var producer))
+                diagnostics.Add(new Diagnostic("RBT3004", DiagnosticSeverity.Error,
+                    $"Artifact '{artifact.Id}' references missing producer '{artifact.ProducerAction}'."));
+            else if (!producer.Outputs.Contains(artifact.Path.Value, StringComparer.Ordinal))
+                diagnostics.Add(new Diagnostic("RBT3005", DiagnosticSeverity.Error,
+                    $"Artifact '{artifact.Id}' path '{artifact.Path}' is not declared by producer '{producer.Id}'."));
+
+        foreach (var duplicate in Artifacts.GroupBy(artifact => artifact.Id, StringComparer.Ordinal)
+                     .Where(group => group.Count() > 1))
+            diagnostics.Add(new Diagnostic("RBT3008", DiagnosticSeverity.Error,
+                $"Artifact ID '{duplicate.Key}' is declared {duplicate.Count()} times."));
+
         return diagnostics.ToImmutable();
+
+        void ValidateCycles()
+        {
+            var states = new Dictionary<string, int>(StringComparer.Ordinal);
+            var stack = new List<string>();
+            var actionsById = Actions.GroupBy(action => action.Id, StringComparer.Ordinal)
+                .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
+            foreach (var action in Actions.OrderBy(action => action.Id, StringComparer.Ordinal)) Visit(action.Id);
+
+            void Visit(string id)
+            {
+                if (!ids.Contains(id) || states.GetValueOrDefault(id) == 2) return;
+
+                if (states.GetValueOrDefault(id) == 1)
+                {
+                    var start = stack.IndexOf(id);
+                    diagnostics.Add(new Diagnostic("RBT3006", DiagnosticSeverity.Error,
+                        $"Action dependency cycle detected: {string.Join(" -> ", stack.Skip(start).Append(id))}."));
+                    return;
+                }
+
+                states[id] = 1;
+                stack.Add(id);
+                var action = actionsById[id];
+                foreach (var dependency in action.Dependencies.Order(StringComparer.Ordinal)) Visit(dependency);
+
+                stack.RemoveAt(stack.Count - 1);
+                states[id] = 2;
+            }
+        }
     }
 }
 

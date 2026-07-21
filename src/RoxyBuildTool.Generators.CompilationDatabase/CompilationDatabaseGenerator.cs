@@ -25,8 +25,8 @@ public sealed class CompilationDatabaseGenerator : IWorkspaceGenerator
             .Where(action => action.Kind == BuildActionKind.Compile)
             .OrderBy(action => action.Id, StringComparer.Ordinal)
             .Select(action => new CompileCommand(
-                ".",
-                action.Inputs.Single(input => input.EndsWith(".cpp", StringComparison.OrdinalIgnoreCase)),
+                Path.GetFullPath(context.WorkspaceRoot),
+                action.Inputs.Single(BuildFileKinds.IsCxxSource),
                 [action.Command, .. action.Arguments],
                 action.Outputs.Single()))
             .ToImmutableArray();

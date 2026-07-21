@@ -72,7 +72,8 @@ public sealed class ValueObjectTests
     public void DiagnosticAndAttributeContractsRetainTheirValues()
     {
         var location = new SourceLocation("Rules.cs", 7, 9);
-        var diagnostic = new Diagnostic("RBT1", DiagnosticSeverity.Warning, "message", "module", "Debug", location, "help");
+        var diagnostic = new Diagnostic("RBT1", DiagnosticSeverity.Warning, "message", "module", "Debug", location,
+            "help");
         var fragment = new BuildFragmentAttribute("Game.Flavor");
         var value = new FragmentValueAttribute("DedicatedServer");
 
@@ -139,6 +140,8 @@ public sealed class ValueObjectTests
 
         Assert.Equal("A=One;B=Two", key.Canonical);
         Assert.Equal(key.ShortHash, same.ShortHash);
+        Assert.Equal(key, same);
+        Assert.Equal(key.GetHashCode(), same.GetHashCode());
         Assert.Equal(12, key.ShortHash.Length);
         Assert.True(key.TryGet(a.Fragment, out var found));
         Assert.Equal(a, found);
@@ -169,6 +172,8 @@ public sealed class ValueObjectTests
     [InlineData(".", ".")]
     [InlineData("./src\\main.cpp", "src/main.cpp")]
     [InlineData("././relative/path", "relative/path")]
+    [InlineData("relative//./path/", "relative/path")]
+    [InlineData("./", ".")]
     public void LogicalPathsNormalizeWorkspaceRelativeInput(string input, string expected)
     {
         var path = new LogicalPath(input);
@@ -251,9 +256,50 @@ public sealed class ValueObjectTests
 
         var diagnostics = graph.Validate();
 
-        Assert.Contains(diagnostics, item => item.Code == "RBT3002" && item.Message.Contains("first, second", StringComparison.Ordinal));
-        Assert.Contains(diagnostics, item => item.Code == "RBT3003" && item.Message.Contains("Missing", StringComparison.Ordinal));
+        Assert.Contains(diagnostics,
+            item => item.Code == "RBT3002" && item.Message.Contains("first, second", StringComparison.Ordinal));
+        Assert.Contains(diagnostics,
+            item => item.Code == "RBT3003" && item.Message.Contains("Missing", StringComparison.Ordinal));
         Assert.Empty(new ActionGraph(new([]), "target", [first], []).Validate());
+    }
+
+    [Fact]
+    public void ActionGraphValidationRejectsNonCanonicalAndEscapingOutputs()
+    {
+        var alias = Action("alias", ["One"]) with { Outputs = ["out\\./file.obj"] };
+        var escaping = Action("escaping", ["Two"]) with { Outputs = ["../file.obj"] };
+
+        var diagnostics = new ActionGraph(new ConfigurationKey([]), "target", [alias, escaping], []).Validate();
+
+        Assert.Equal(2, diagnostics.Count(item => item.Code == "RBT3009"));
+    }
+
+    [Fact]
+    public void ActionGraphValidationReportsDuplicateIdsCyclesAndInvalidArtifacts()
+    {
+        var first = Action("first", ["One"]) with { Outputs = ["first.obj"], Dependencies = ["second"] };
+        var duplicateFirst = Action("first", ["Duplicate"]) with { Outputs = ["duplicate.obj"] };
+        var second = Action("second", ["Two"]) with { Outputs = ["second.obj"], Dependencies = ["first"] };
+        var graph = new ActionGraph(new ConfigurationKey([]), "target", [first, duplicateFirst, second],
+        [
+            new BuildArtifact("missing", ArtifactKind.ObjectFile, new LogicalPath("missing.obj"), "absent"),
+            new BuildArtifact("mismatch", ArtifactKind.ObjectFile, new LogicalPath("other.obj"), "second"),
+            new BuildArtifact("mismatch", ArtifactKind.ObjectFile, new LogicalPath("second.obj"), "second")
+        ]);
+
+        var diagnostics = graph.Validate();
+
+        Assert.Contains(diagnostics,
+            item => item.Code == "RBT3001" && item.Message.Contains("first", StringComparison.Ordinal));
+        Assert.Contains(diagnostics,
+            item => item.Code == "RBT3004" && item.Message.Contains("absent", StringComparison.Ordinal));
+        Assert.Contains(diagnostics,
+            item => item.Code == "RBT3005" && item.Message.Contains("other.obj", StringComparison.Ordinal));
+        Assert.Contains(diagnostics,
+            item => item.Code == "RBT3006" &&
+                    item.Message.Contains("first -> second -> first", StringComparison.Ordinal));
+        Assert.Contains(diagnostics,
+            item => item.Code == "RBT3008" && item.Message.Contains("mismatch", StringComparison.Ordinal));
     }
 
     private static ConfiguredModule Module(string id) => new(
@@ -261,7 +307,9 @@ public sealed class ValueObjectTests
         UsageRequirements.Empty, UsageRequirements.Empty, [], [], []);
 
     private static BuildAction Action(string id, ImmutableArray<string> arguments) => new(
-        id, BuildActionKind.Compile, "compiler", arguments, new("."), ["source.cpp"], ["output.obj"], [], [], true, true, []);
+        id, BuildActionKind.Compile, "compiler", arguments, new LogicalPath("."), ["source.cpp"], ["output.obj"], [],
+        [], true,
+        true, []);
 
     private static void AssertIdentifier<T>(T id, string expected) where T : struct
     {

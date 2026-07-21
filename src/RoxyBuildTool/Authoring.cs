@@ -1,6 +1,8 @@
+using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.IO.Enumeration;
 using System.Reflection;
+using System.Runtime.ExceptionServices;
 using RoxyBuildTool.Abstractions;
 using RoxyBuildTool.Configuration;
 using RoxyBuildTool.Graph;
@@ -15,6 +17,12 @@ public interface IRulesModule
     void Register(BuildRegistry registry);
 }
 
+/// <summary>Reports a user-correctable rules definition failure with a stable diagnostic.</summary>
+public sealed class RuleDefinitionException(Diagnostic diagnostic) : Exception(diagnostic.Message)
+{
+    public Diagnostic Diagnostic { get; } = diagnostic;
+}
+
 /// <summary>Base type for native C++ module definitions.</summary>
 public abstract class CxxModule
 {
@@ -24,6 +32,10 @@ public abstract class CxxModule
 public abstract class CSharpModule
 {
 }
+
+/// <summary>Excludes a rule type from assembly discovery while still allowing explicit registration.</summary>
+[AttributeUsage(AttributeTargets.Class, Inherited = false)]
+public sealed class BuildRuleIgnoreAttribute : Attribute;
 
 /// <summary>Marks a method that contributes settings to a module, target, or workspace definition.</summary>
 [AttributeUsage(AttributeTargets.Method, AllowMultiple = true, Inherited = true)]
@@ -42,16 +54,20 @@ public class ConfigureAttribute : Attribute
         Values = values.Select(value => new FragmentValue(Fragment.Value, value)).ToImmutableArray();
         if (Values.IsEmpty)
         {
-            throw new ArgumentException("A filtered [Configure] attribute requires at least one value.", nameof(values));
+            throw new ArgumentException("A filtered [Configure] attribute requires at least one value.",
+                nameof(values));
         }
     }
 
     /// <summary>Gets the fragment used by the filter, or <see langword="null"/> for an unconditional method.</summary>
     public FragmentId? Fragment { get; }
+
     /// <summary>Gets the accepted fragment values.</summary>
     public ImmutableArray<FragmentValue> Values { get; }
+
     /// <summary>Gets or sets the method ordering priority. Lower values run first.</summary>
     public int Priority { get; set; }
+
     internal bool IsUnconditional => Fragment is null;
 }
 
@@ -100,13 +116,16 @@ public enum CSharpOutput
 public sealed class BuildRegistry(string workspaceRoot)
 {
     private readonly List<Type> _modules = [];
+    private readonly SourceFileSnapshotCache _sourceFiles = new();
     private readonly List<Type> _targets = [];
     private readonly List<Type> _workspaces = [];
 
     /// <summary>Registers a module type explicitly.</summary>
     public void AddModule<T>() where T : class, new() => AddUnique(_modules, typeof(T), "module");
+
     /// <summary>Registers a target type explicitly.</summary>
     public void AddTarget<T>() where T : BuildTarget, new() => AddUnique(_targets, typeof(T), "target");
+
     /// <summary>Registers a workspace type explicitly.</summary>
     public void AddWorkspace<T>() where T : BuildWorkspace, new() => AddUnique(_workspaces, typeof(T), "workspace");
 
@@ -115,7 +134,8 @@ public sealed class BuildRegistry(string workspaceRoot)
     {
         ArgumentNullException.ThrowIfNull(assembly);
         foreach (var type in assembly.GetTypes()
-                     .Where(type => type is { IsAbstract: false, ContainsGenericParameters: false })
+                     .Where(type => type is { IsAbstract: false, ContainsGenericParameters: false } &&
+                                    !type.IsDefined(typeof(BuildRuleIgnoreAttribute), inherit: false))
                      .OrderBy(type => type.FullName, StringComparer.Ordinal))
         {
             if (typeof(CxxModule).IsAssignableFrom(type) || typeof(CSharpModule).IsAssignableFrom(type))
@@ -138,9 +158,16 @@ public sealed class BuildRegistry(string workspaceRoot)
 
     internal DefinitionGraph Build()
     {
-        var modules = _modules.Select(BuildModule).OrderBy(module => module.Id, StringComparer.Ordinal).ToImmutableArray();
-        var targets = _targets.Select(BuildTargetDefinition).OrderBy(target => target.Id, StringComparer.Ordinal).ToImmutableArray();
-        var workspaces = _workspaces.Select(BuildWorkspaceDefinition).OrderBy(workspace => workspace.Id, StringComparer.Ordinal).ToImmutableArray();
+        EnsureUniqueDefinitionIds(_modules, "module");
+        EnsureUniqueDefinitionIds(_targets, "target");
+        EnsureUniqueDefinitionIds(_workspaces, "workspace");
+        var modules = _modules.Select(BuildModule).OrderBy(module => module.Id, StringComparer.Ordinal)
+            .ToImmutableArray();
+        var targets = _targets.Select(BuildTargetDefinition).OrderBy(target => target.Id, StringComparer.Ordinal)
+            .ToImmutableArray();
+        var workspaces = _workspaces.Select(BuildWorkspaceDefinition)
+            .OrderBy(workspace => workspace.Id, StringComparer.Ordinal).ToImmutableArray();
+        ValidateReferences(modules, targets, workspaces);
         return new(modules, targets, workspaces);
     }
 
@@ -164,23 +191,34 @@ public sealed class BuildRegistry(string workspaceRoot)
     {
         if (typeof(CxxModule).IsAssignableFrom(type))
         {
-            var module = (CxxModule)Activator.CreateInstance(type)!;
-            return BuildCxxDefinition(module, type, configuration: null) with
+            var cache = new ConcurrentDictionary<string, Lazy<ModuleDefinition>>(StringComparer.Ordinal);
+            return BuildCxxDefinition((CxxModule)Activator.CreateInstance(type)!, type, configuration: null) with
             {
-                ConfigureForConfiguration = configuration => BuildCxxDefinition(module, type, configuration),
+                ConfigureForConfiguration = configuration => cache.GetOrAdd(
+                    configuration.Canonical,
+                    _ => new Lazy<ModuleDefinition>(
+                        () => BuildCxxDefinition(
+                            (CxxModule)Activator.CreateInstance(type)!, type, configuration),
+                        LazyThreadSafetyMode.ExecutionAndPublication)).Value,
             };
         }
 
         if (typeof(CSharpModule).IsAssignableFrom(type))
         {
-            var module = (CSharpModule)Activator.CreateInstance(type)!;
-            return BuildCSharpDefinition(module, type, configuration: null) with
+            var cache = new ConcurrentDictionary<string, Lazy<ModuleDefinition>>(StringComparer.Ordinal);
+            return BuildCSharpDefinition((CSharpModule)Activator.CreateInstance(type)!, type, configuration: null) with
             {
-                ConfigureForConfiguration = configuration => BuildCSharpDefinition(module, type, configuration),
+                ConfigureForConfiguration = configuration => cache.GetOrAdd(
+                    configuration.Canonical,
+                    _ => new Lazy<ModuleDefinition>(
+                        () => BuildCSharpDefinition(
+                            (CSharpModule)Activator.CreateInstance(type)!, type, configuration),
+                        LazyThreadSafetyMode.ExecutionAndPublication)).Value,
             };
         }
 
-        throw new InvalidOperationException($"Registered module '{type.FullName}' must derive from CxxModule or CSharpModule.");
+        throw new InvalidOperationException(
+            $"Registered module '{type.FullName}' must derive from CxxModule or CSharpModule.");
     }
 
     private TargetDefinition BuildTargetDefinition(Type type)
@@ -201,14 +239,14 @@ public sealed class BuildRegistry(string workspaceRoot)
 
     private ModuleDefinition BuildCxxDefinition(CxxModule module, Type type, ConfigurationKey? configuration)
     {
-        var rules = new ModuleRules(workspaceRoot);
+        var rules = new ModuleRules(workspaceRoot, _sourceFiles);
         ApplyConfigureMethods(module, rules, configuration, allowFiltered: true);
         return rules.Build(type);
     }
 
     private ModuleDefinition BuildCSharpDefinition(CSharpModule module, Type type, ConfigurationKey? configuration)
     {
-        var rules = new CSharpModuleRules(workspaceRoot);
+        var rules = new CSharpModuleRules(workspaceRoot, _sourceFiles);
         ApplyConfigureMethods(module, rules, configuration, allowFiltered: true);
         return rules.Build(type);
     }
@@ -220,8 +258,10 @@ public sealed class BuildRegistry(string workspaceRoot)
         bool allowFiltered)
     {
         var methods = instance.GetType().GetMethods(
-                BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.FlattenHierarchy)
-            .Select(method => (Method: method, Attributes: method.GetCustomAttributes<ConfigureAttribute>(inherit: true).ToImmutableArray()))
+                BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic |
+                BindingFlags.FlattenHierarchy)
+            .Select(method => (Method: method,
+                Attributes: method.GetCustomAttributes<ConfigureAttribute>(inherit: true).ToImmutableArray()))
             .Where(item => !item.Attributes.IsEmpty)
             .OrderBy(item => item.Attributes.Min(attribute => attribute.Priority))
             .ThenBy(item => item.Attributes.All(attribute => attribute.IsUnconditional) ? 0 : 1)
@@ -238,12 +278,20 @@ public sealed class BuildRegistry(string workspaceRoot)
                     $"Filtered [Configure] is not supported on '{instance.GetType().Name}.{item.Method.Name}'. " +
                     "Put configuration axes on TargetRules.Matrix and filtered settings on modules.");
             }
+
             if (!Matches(item.Attributes, configuration))
             {
                 continue;
             }
 
-            item.Method.Invoke(item.Method.IsStatic ? null : instance, [rules]);
+            try
+            {
+                item.Method.Invoke(item.Method.IsStatic ? null : instance, [rules]);
+            }
+            catch (TargetInvocationException exception) when (exception.InnerException is not null)
+            {
+                ExceptionDispatchInfo.Capture(exception.InnerException).Throw();
+            }
         }
     }
 
@@ -253,10 +301,12 @@ public sealed class BuildRegistry(string workspaceRoot)
         {
             return true;
         }
+
         if (configuration is null)
         {
             return false;
         }
+
         return attributes.GroupBy(attribute => attribute.Fragment!.Value)
             .All(group => group.SelectMany(attribute => attribute.Values).Any(configuration.Is));
     }
@@ -265,8 +315,10 @@ public sealed class BuildRegistry(string workspaceRoot)
     {
         if (method.ReturnType != typeof(void))
         {
-            throw new InvalidOperationException($"[Configure] method '{method.DeclaringType?.FullName}.{method.Name}' must return void.");
+            throw new InvalidOperationException(
+                $"[Configure] method '{method.DeclaringType?.FullName}.{method.Name}' must return void.");
         }
+
         var parameters = method.GetParameters();
         if (parameters.Length != 1 || parameters[0].ParameterType != rulesType)
         {
@@ -281,6 +333,7 @@ public sealed class BuildRegistry(string workspaceRoot)
         {
             throw new InvalidOperationException($"The {kind} '{type.FullName}' is already registered.");
         }
+
         types.Add(type);
     }
 
@@ -292,20 +345,107 @@ public sealed class BuildRegistry(string workspaceRoot)
                 $"Discovered rules type '{type.FullName}' must have a public parameterless constructor.");
         }
     }
+
+    private static void EnsureUniqueDefinitionIds(IEnumerable<Type> types, string kind)
+    {
+        var duplicate = types.GroupBy(DefinitionId, StringComparer.Ordinal).FirstOrDefault(group => group.Count() > 1);
+        if (duplicate is not null)
+        {
+            throw new RuleDefinitionException(new Diagnostic(
+                "RBT2101",
+                DiagnosticSeverity.Error,
+                $"Multiple {kind} rule types produce definition ID '{duplicate.Key}': " +
+                $"{string.Join(", ", duplicate.Select(type => type.FullName).Order(StringComparer.Ordinal))}."));
+        }
+    }
+
+    private static void ValidateReferences(
+        ImmutableArray<ModuleDefinition> modules,
+        ImmutableArray<TargetDefinition> targets,
+        ImmutableArray<WorkspaceDefinition> workspaces)
+    {
+        var moduleIds = modules.Select(module => module.Id).ToHashSet(StringComparer.Ordinal);
+        var targetIds = targets.Select(target => target.Id).ToHashSet(StringComparer.Ordinal);
+        var errors = new List<string>();
+        foreach (var module in modules)
+        {
+            errors.AddRange(module.Dependencies
+                .Where(dependency => !moduleIds.Contains(dependency.Module))
+                .Select(dependency => $"Module '{module.Id}' references unregistered module '{dependency.Module}'."));
+        }
+
+        foreach (var target in targets)
+        {
+            errors.AddRange(target.RootModules
+                .Where(module => !moduleIds.Contains(module))
+                .Select(module => $"Target '{target.Id}' references unregistered root module '{module}'."));
+            foreach (var requiredFragment in new[]
+                     {
+                         FragmentIds.Platform,
+                         FragmentIds.Architecture,
+                         FragmentIds.Profile,
+                         FragmentIds.Toolchain,
+                         FragmentIds.LinkModel,
+                     })
+            {
+                if (!target.Matrix.Axes.Any(axis => axis.Fragment == requiredFragment))
+                {
+                    errors.Add($"Target '{target.Id}' matrix is missing required axis '{requiredFragment}'.");
+                }
+            }
+        }
+
+        foreach (var workspace in workspaces)
+        {
+            errors.AddRange(workspace.Targets
+                .Where(target => !targetIds.Contains(target))
+                .Select(target => $"Workspace '{workspace.Id}' references unregistered target '{target}'."));
+            if (!workspace.Targets.Contains(workspace.StartupTarget, StringComparer.Ordinal))
+            {
+                errors.Add(
+                    $"Workspace '{workspace.Id}' startup target '{workspace.StartupTarget}' is not in its target list.");
+            }
+        }
+
+        if (errors.Count > 0)
+            throw new RuleDefinitionException(new Diagnostic(
+                "RBT2102",
+                DiagnosticSeverity.Error,
+                string.Join(Environment.NewLine, errors.Distinct(StringComparer.Ordinal)
+                    .Order(StringComparer.Ordinal))));
+    }
+}
+
+internal sealed class SourceFileSnapshotCache
+{
+    private readonly ConcurrentDictionary<string, Lazy<ImmutableArray<string>>> _snapshots =
+        new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+
+    public ImmutableArray<string> GetFiles(string absoluteRoot) => _snapshots.GetOrAdd(
+        absoluteRoot,
+        root => new Lazy<ImmutableArray<string>>(
+            () =>
+            [
+                .. Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
+                    .Order(StringComparer.Ordinal)
+            ],
+            LazyThreadSafetyMode.ExecutionAndPublication)).Value;
 }
 
 /// <summary>Defines sources, output, usage requirements, dependencies, and conditional settings for a C++ module.</summary>
 public class ModuleRules
 {
-    private readonly string _workspaceRoot;
-    private readonly List<(string Root, string Pattern)> _sourcePatterns = [];
-    private readonly List<string> _sourceExclusions = [];
-    private readonly List<DependencySpec> _dependencies = [];
     private readonly List<ConditionalModuleRule> _conditionalRules = [];
+    private readonly List<DependencySpec> _dependencies = [];
+    private readonly List<string> _sourceExclusions = [];
+    private readonly SourceFileSnapshotCache _sourceFiles;
+    private readonly List<(string Root, string Pattern)> _sourcePatterns = [];
+    private readonly string _workspaceRoot;
 
-    internal ModuleRules(string workspaceRoot)
+    internal ModuleRules(string workspaceRoot, SourceFileSnapshotCache sourceFiles)
     {
         _workspaceRoot = workspaceRoot;
+        _sourceFiles = sourceFiles;
         Sources = new SourceRules(_sourcePatterns, _sourceExclusions);
         Public = new UsageRules();
         Private = new UsageRules();
@@ -314,12 +454,16 @@ public class ModuleRules
 
     /// <summary>Gets or sets the native output kind.</summary>
     public CxxOutput Output { get; set; } = CxxOutput.StaticLibrary;
+
     /// <summary>Gets the module source rules.</summary>
     public SourceRules Sources { get; }
+
     /// <summary>Gets usage requirements exported to consumers.</summary>
     public UsageRules Public { get; }
+
     /// <summary>Gets usage requirements used only by this module.</summary>
     public UsageRules Private { get; }
+
     /// <summary>Gets the typed dependency rules.</summary>
     public DependencyRules Dependencies { get; }
 
@@ -343,7 +487,8 @@ public class ModuleRules
         ExpandSources(),
         Public.Build(BuildRegistry.DefinitionId(type), "public"),
         Private.Build(BuildRegistry.DefinitionId(type), "private"),
-        _dependencies.Select(dependency => new DependencyEdge(BuildRegistry.DefinitionId(dependency.Type), dependency.Visibility))
+        _dependencies.Select(dependency =>
+                new DependencyEdge(BuildRegistry.DefinitionId(dependency.Type), dependency.Visibility))
             .OrderBy(edge => edge.Module, StringComparer.Ordinal).ThenBy(edge => edge.Visibility).ToImmutableArray(),
         [],
         [],
@@ -360,10 +505,11 @@ public class ModuleRules
                 throw new DirectoryNotFoundException($"Source root '{root}' does not exist under '{_workspaceRoot}'.");
             }
 
-            foreach (var path in Directory.EnumerateFiles(absoluteRoot, "*", SearchOption.AllDirectories))
+            foreach (var path in _sourceFiles.GetFiles(absoluteRoot))
             {
                 var relativeWithinRoot = Path.GetRelativePath(absoluteRoot, path).Replace('\\', '/');
-                if (Matches(pattern, relativeWithinRoot) && !_sourceExclusions.Any(exclusion => Matches(exclusion, relativeWithinRoot)))
+                if (Matches(pattern, relativeWithinRoot) &&
+                    !_sourceExclusions.Any(exclusion => Matches(exclusion, relativeWithinRoot)))
                 {
                     result.Add(Path.GetRelativePath(_workspaceRoot, path).Replace('\\', '/'));
                 }
@@ -375,23 +521,41 @@ public class ModuleRules
 
     private static bool Matches(string pattern, string relativePath)
     {
-        var normalizedPattern = pattern.Replace('\\', '/');
-        if (normalizedPattern.StartsWith("**/", StringComparison.Ordinal))
+        var patternSegments = pattern.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+        var pathSegments = relativePath.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+        var memo = new Dictionary<(int Pattern, int Path), bool>();
+        return Match(0, 0);
+
+        bool Match(int patternIndex, int pathIndex)
         {
-            normalizedPattern = normalizedPattern[3..];
-            return FileSystemName.MatchesSimpleExpression(normalizedPattern, Path.GetFileName(relativePath), ignoreCase: true);
+            if (memo.TryGetValue((patternIndex, pathIndex), out var cached))
+                return cached;
+
+            var result = patternIndex == patternSegments.Length
+                ? pathIndex == pathSegments.Length
+                : patternSegments[patternIndex] == "**"
+                    ? Match(patternIndex + 1, pathIndex) ||
+                      pathIndex < pathSegments.Length && Match(patternIndex, pathIndex + 1)
+                    : pathIndex < pathSegments.Length &&
+                      FileSystemName.MatchesSimpleExpression(
+                          patternSegments[patternIndex],
+                          pathSegments[pathIndex],
+                          ignoreCase: OperatingSystem.IsWindows()) &&
+                      Match(patternIndex + 1, pathIndex + 1);
+            memo[(patternIndex, pathIndex)] = result;
+            return result;
         }
-        return FileSystemName.MatchesSimpleExpression(normalizedPattern, relativePath, ignoreCase: true);
     }
 }
 
 /// <summary>Defines managed output, target frameworks, packages, and shared module settings for a C# module.</summary>
 public sealed class CSharpModuleRules : ModuleRules
 {
-    private readonly List<string> _targetFrameworks = [];
     private readonly List<PackageReferenceModel> _packages = [];
+    private readonly List<string> _targetFrameworks = [];
 
-    internal CSharpModuleRules(string workspaceRoot) : base(workspaceRoot)
+    internal CSharpModuleRules(string workspaceRoot, SourceFileSnapshotCache sourceFiles)
+        : base(workspaceRoot, sourceFiles)
     {
         TargetFrameworks = new StringRules(_targetFrameworks);
         Packages = new PackageRules(_packages);
@@ -399,10 +563,13 @@ public sealed class CSharpModuleRules : ModuleRules
 
     /// <summary>Gets or sets the managed output kind.</summary>
     public CSharpOutput ManagedOutput { get; set; } = CSharpOutput.ClassLibrary;
+
     /// <summary>Gets the target framework collection.</summary>
     public StringRules TargetFrameworks { get; }
+
     /// <summary>Gets the package reference collection.</summary>
     public PackageRules Packages { get; }
+
     /// <summary>Gets or sets the root namespace emitted into the generated project.</summary>
     public string? RootNamespace { get; set; }
 
@@ -416,7 +583,7 @@ public sealed class CSharpModuleRules : ModuleRules
                 ? ModuleKind.CSharpClassLibrary
                 : ModuleKind.CSharpConsoleApplication,
             TargetFrameworks = (_targetFrameworks.Count == 0 ? ["net10.0"] : _targetFrameworks)
-                .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToImmutableArray(),
+            .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToImmutableArray(),
             Packages = _packages.Distinct().OrderBy(package => package.Id, StringComparer.Ordinal).ToImmutableArray(),
             RootNamespace = RootNamespace,
         };
@@ -430,6 +597,7 @@ public sealed class SourceRules(
 {
     /// <summary>Adds files matching <paramref name="pattern"/> below <paramref name="root"/>.</summary>
     public void From(string root, string pattern) => patterns.Add((root, pattern));
+
     /// <summary>Excludes source paths matching <paramref name="pattern"/>.</summary>
     public void Exclude(string pattern) => exclusions.Add(pattern);
 }
@@ -437,8 +605,8 @@ public sealed class SourceRules(
 /// <summary>Collects include, define, link, and runtime requirements for one visibility scope.</summary>
 public sealed class UsageRules
 {
-    private readonly List<string> _includes = [];
     private readonly List<string> _defines = [];
+    private readonly List<string> _includes = [];
     private readonly List<string> _links = [];
     private readonly List<string> _runtime = [];
 
@@ -453,10 +621,11 @@ public sealed class UsageRules
         Values(_links, module, visibility),
         Values(_runtime, module, visibility));
 
-    private static ImmutableArray<UsageValue> Values(IEnumerable<string> values, string module, string visibility) => values
-        .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)
-        .Select(value => new UsageValue(value.Replace('\\', '/'), $"{module}:{visibility}"))
-        .ToImmutableArray();
+    private static ImmutableArray<UsageValue> Values(IEnumerable<string> values, string module, string visibility) =>
+        values
+            .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)
+            .Select(value => new UsageValue(value.Replace('\\', '/'), $"{module}:{visibility}"))
+            .ToImmutableArray();
 }
 
 /// <summary>Provides an append-only collection surface for string settings.</summary>
@@ -470,7 +639,8 @@ public sealed class StringRules(List<string> values)
 public sealed class PackageRules(List<PackageReferenceModel> packages)
 {
     /// <summary>Adds a package reference.</summary>
-    public void Add(string id, string version, bool privateAssets = false) => packages.Add(new(id, version, privateAssets));
+    public void Add(string id, string version, bool privateAssets = false) =>
+        packages.Add(new(id, version, privateAssets));
 }
 
 internal sealed record DependencySpec(Type Type, DependencyVisibility Visibility);
@@ -484,12 +654,17 @@ public sealed class DependencyRules
 
     /// <summary>Adds a dependency used by the current module but not exported.</summary>
     public void Private<T>() where T : class => _dependencies.Add(new(typeof(T), DependencyVisibility.Private));
+
     /// <summary>Adds a dependency used by the current module and exported to consumers.</summary>
     public void Public<T>() where T : class => _dependencies.Add(new(typeof(T), DependencyVisibility.Public));
+
     /// <summary>Adds a dependency exported to consumers but not used to compile the current module.</summary>
     public void Interface<T>() where T : class => _dependencies.Add(new(typeof(T), DependencyVisibility.Interface));
+
     /// <summary>Adds an action-ordering dependency without usage propagation.</summary>
-    public void BuildOrderOnly<T>() where T : class => _dependencies.Add(new(typeof(T), DependencyVisibility.BuildOrderOnly));
+    public void BuildOrderOnly<T>() where T : class =>
+        _dependencies.Add(new(typeof(T), DependencyVisibility.BuildOrderOnly));
+
     /// <summary>Adds a dependency whose runtime files are staged for the current module.</summary>
     public void Runtime<T>() where T : class => _dependencies.Add(new(typeof(T), DependencyVisibility.Runtime));
 }
@@ -497,11 +672,11 @@ public sealed class DependencyRules
 /// <summary>Builds module mutations applied for one selected fragment value.</summary>
 public sealed class ConditionalModuleRules
 {
+    private readonly List<string> _defines = [];
     private readonly FragmentValue _match;
+    private readonly List<string> _removeDependencies = [];
     private readonly List<ConditionalModuleRule> _rules;
     private bool _disable;
-    private readonly List<string> _defines = [];
-    private readonly List<string> _removeDependencies = [];
 
     internal ConditionalModuleRules(FragmentValue match, List<ConditionalModuleRule> rules)
     {
@@ -535,24 +710,30 @@ public sealed class ConditionalModuleRules
     }
 
     private void Update() => _rules[^1] = Snapshot();
-    private ConditionalModuleRule Snapshot() => new(_match, _disable, _defines.ToImmutableArray(), _removeDependencies.ToImmutableArray());
+
+    private ConditionalModuleRule Snapshot() => new(_match, _disable, _defines.ToImmutableArray(),
+        _removeDependencies.ToImmutableArray());
 }
 
 /// <summary>Defines a target's root modules and configuration matrix.</summary>
 public sealed class TargetRules
 {
     private readonly List<Type> _roots = [];
+
     /// <summary>Gets the target's root module collection.</summary>
     public TypeRules RootModules => new(_roots);
+
     /// <summary>Gets the target's configuration matrix builder.</summary>
     public MatrixBuilder Matrix { get; } = new();
+
     /// <summary>Adds an entry module to the target.</summary>
     public void EntryModule<T>() where T : class => _roots.Add(typeof(T));
 
     internal TargetDefinition Build(Type type) => new(
         BuildRegistry.DefinitionId(type),
         type.Name,
-        _roots.Select(BuildRegistry.DefinitionId).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToImmutableArray(),
+        _roots.Select(BuildRegistry.DefinitionId).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)
+            .ToImmutableArray(),
         Matrix.Build());
 }
 
@@ -568,12 +749,16 @@ public sealed class WorkspaceRules
 {
     private readonly List<Type> _targets = [];
     private Type? _startup;
+
     /// <summary>Gets the workspace target collection.</summary>
     public TypeRules Targets => new(_targets);
+
     /// <summary>Gets or sets whether the project-local build host is included in the workspace.</summary>
     public bool IncludeBuildHost { get; set; } = true;
+
     /// <summary>Gets or sets the workspace-relative build-host project path.</summary>
     public string BuildHostProject { get; set; } = "Build/RoxyBuild.csproj";
+
     /// <summary>Selects the startup target.</summary>
     public void StartupTarget<T>() where T : BuildTarget => _startup = typeof(T);
 
@@ -583,11 +768,13 @@ public sealed class WorkspaceRules
         {
             throw new InvalidOperationException($"Workspace '{type.Name}' has no targets.");
         }
+
         var startup = _startup ?? _targets[0];
         return new(
             BuildRegistry.DefinitionId(type),
             type.Name,
-            _targets.Select(BuildRegistry.DefinitionId).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToImmutableArray(),
+            _targets.Select(BuildRegistry.DefinitionId).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)
+                .ToImmutableArray(),
             BuildRegistry.DefinitionId(startup),
             IncludeBuildHost,
             IncludeBuildHost ? new(BuildHostProject) : null);

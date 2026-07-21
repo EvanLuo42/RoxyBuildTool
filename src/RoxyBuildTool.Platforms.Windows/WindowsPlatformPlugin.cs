@@ -37,7 +37,10 @@ public sealed class WindowsPlatformPlugin : IPlugin
             "link.exe",
             "v143",
             CreatePolicies(),
-            new CapabilitySet(["Cxx20", "CxxLatest", "SharedLibrary", "ResponseFile"])));
+            new CapabilitySet([
+                "Cxx20", "CxxLatest", "SharedLibrary", "WindowsResource", "ResponseFile", "LinkModel.Modular",
+            ]),
+            "rc.exe"));
     }
 
     private static ImmutableDictionary<string, CxxProfilePolicy> CreatePolicies() =>

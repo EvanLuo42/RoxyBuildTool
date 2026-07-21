@@ -1,7 +1,6 @@
-using System.Collections.Immutable;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
-using RoxyBuildTool.Abstractions;
 using RoxyBuildTool.Configuration;
 using RoxyBuildTool.Generators.CompilationDatabase;
 using RoxyBuildTool.Generators.VisualStudio;
@@ -29,19 +28,25 @@ public sealed partial class GeneratorGoldenTests
     {
         var result = new CompilationDatabaseGenerator().Generate(Workspace(),
             new("C:/checkout", new(".roxy/generated/CompileDb/mini")));
+        var actual = Assert.Single(result.Files).Content.Replace(
+            JsonSerializer.Serialize(Path.GetFullPath("C:/checkout")),
+            JsonSerializer.Serialize("."),
+            StringComparison.Ordinal);
 
-        Assert.Equal(ReadGolden("compile_commands.json"), Assert.Single(result.Files).Content);
+        Assert.Equal(ReadGolden("compile_commands.json"), actual);
     }
 
     [Fact]
     public void SolutionUsesHumanReadableConfigurationAndWin64DisplayPlatform()
     {
-        var result = new VisualStudio2022Generator().Generate(Workspace(),
+        var model = Workspace();
+        var result = new VisualStudio2022Generator().Generate(model,
             new("C:/checkout", new(".roxy/generated/vs2022/mini")));
         var solution = result.Files.Single(file => file.Path.Value == "Mini.sln").Content;
 
-        Assert.Contains("Development|Win64 = Development|Win64", solution, StringComparison.Ordinal);
-        Assert.Contains("Development|Win64.ActiveCfg = Development|x64", solution, StringComparison.Ordinal);
+        var displayName = BuildConfigurationNames.DisplayName(model.Projects[0].Variants[0].Configuration);
+        Assert.Contains($"{displayName}|Win64 = {displayName}|Win64", solution, StringComparison.Ordinal);
+        Assert.Contains($"{displayName}|Win64.ActiveCfg = {displayName}|x64", solution, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -59,24 +64,26 @@ public sealed partial class GeneratorGoldenTests
                 [new("game", clientConfiguration, gameModule)], []),
         };
         var model = new WorkspaceModel("Mapped", "game", [.. projects],
-            [
-                new(clientConfiguration, new("game", "Game", ["game"]), [gameModule], []),
-                new(editorConfiguration, new("editor", "Editor", ["editor"]), [editorModule], []),
-            ], []);
+        [
+            new(clientConfiguration, new("game", "Game", ["game"]), [gameModule], []),
+            new(editorConfiguration, new("editor", "Editor", ["editor"]), [editorModule], []),
+        ], []);
 
         var result = new VisualStudio2022Generator().Generate(model,
             new("C:/checkout", new(".roxy/generated/vs2022/mapped")));
         var solution = result.Files.Single(file => file.Path.Value == "Mapped.sln").Content;
 
-        Assert.Matches(@"\{[^}]+\}\.Development Client\|Win64\.ActiveCfg = Development Editor\|x64", solution);
-        Assert.Matches(@"\{[^}]+\}\.Development Client\|Win64\.Build\.0 = Development Editor\|x64", solution);
+        var client = Regex.Escape(BuildConfigurationNames.DisplayName(clientConfiguration));
+        var editor = Regex.Escape(BuildConfigurationNames.DisplayName(editorConfiguration));
+        Assert.Matches($@"\{{[^}}]+\}}\.{client}\|Win64\.ActiveCfg = {editor}\|x64", solution);
+        Assert.DoesNotMatch($@"\{{[^}}]+\}}\.{client}\|Win64\.Build\.0 = {editor}\|x64", solution);
     }
 
     [Fact]
     public void CSharpProjectOnlyIncludesExplicitRoxyItems()
     {
         var configuration = new ConfigurationKey([
-            Configuration.Platforms.Windows,
+            Platforms.Windows,
             Architectures.X64,
             BuildProfiles.Development,
             Configuration.Toolchains.Msvc,
@@ -102,7 +109,8 @@ public sealed partial class GeneratorGoldenTests
         var nativeProject = new WorkspaceProject("NativeRuntime", "NativeRuntime", ModuleLanguage.Cxx,
             [new("ManagedTool", configuration, native)], []);
         var model = new WorkspaceModel("Managed", "ManagedTool", [project, protocolProject, nativeProject],
-            [new(configuration, new("ManagedTool", "ManagedTool", ["ManagedTool"]), [module, protocol, native], [])], []);
+            [new(configuration, new("ManagedTool", "ManagedTool", ["ManagedTool"]), [module, protocol, native], [])],
+            []);
 
         var result = new VisualStudio2022Generator().Generate(model,
             new("C:/checkout", new(".roxy/generated/vs2022/managed")));
@@ -122,7 +130,8 @@ public sealed partial class GeneratorGoldenTests
 
         var references = document.Descendants("ProjectReference")
             .ToDictionary(reference => (string)reference.Attribute("Include")!, StringComparer.Ordinal);
-        Assert.DoesNotContain("ReferenceOutputAssembly", references["ManagedProtocol.csproj"].Elements().Select(element => element.Name.LocalName));
+        Assert.DoesNotContain("ReferenceOutputAssembly",
+            references["ManagedProtocol.csproj"].Elements().Select(element => element.Name.LocalName));
         Assert.Equal("false", references["NativeRuntime.vcxproj"].Element("ReferenceOutputAssembly")?.Value);
         Assert.Equal("true", references["NativeRuntime.vcxproj"].Element("SkipGetTargetFrameworkProperties")?.Value);
     }
@@ -130,7 +139,7 @@ public sealed partial class GeneratorGoldenTests
     private static WorkspaceModel Workspace()
     {
         var configuration = new ConfigurationKey([
-            Configuration.Platforms.Windows,
+            Platforms.Windows,
             Architectures.X64,
             BuildProfiles.Development,
             Configuration.Toolchains.Msvc,
@@ -157,7 +166,7 @@ public sealed partial class GeneratorGoldenTests
     }
 
     private static ConfigurationKey GameConfiguration(string flavor) => new([
-        Configuration.Platforms.Windows,
+        Platforms.Windows,
         Architectures.X64,
         BuildProfiles.Development,
         Configuration.Toolchains.Msvc,
@@ -171,7 +180,8 @@ public sealed partial class GeneratorGoldenTests
         UsageRequirements.Empty, UsageRequirements.Empty, [], [], []);
 
     private static string ReadGolden(string name) =>
-        File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Golden", name)).Replace("\r\n", "\n", StringComparison.Ordinal);
+        File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Golden", name))
+            .Replace("\r\n", "\n", StringComparison.Ordinal);
 
     [GeneratedRegex("<ProjectGuid>.*?</ProjectGuid>", RegexOptions.CultureInvariant)]
     private static partial Regex ProjectGuidPattern();

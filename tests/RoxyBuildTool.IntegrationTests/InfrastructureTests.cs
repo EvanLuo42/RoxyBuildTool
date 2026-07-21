@@ -1,7 +1,9 @@
 using System.Xml.Linq;
+using RoxyBuildTool.Abstractions;
 using RoxyBuildTool.Configuration;
 using RoxyBuildTool.Generators.VisualStudio;
 using RoxyBuildTool.Model;
+using RoxyBuildTool.Platforms.Windows;
 using Xunit;
 
 namespace RoxyBuildTool.IntegrationTests;
@@ -12,7 +14,7 @@ public sealed class InfrastructureTests
     public async Task AssemblyDiscoveryRegistersModulesTargetsAndWorkspacesDeterministically()
     {
         using var output = new StringWriter();
-        var exitCode = await global::RoxyBuildTool.BuildToolApp.Create([
+        var exitCode = await BuildToolApp.Create([
                 "explain", "ReflectedTarget", "--profile", "debug", "--setting", "usage",
             ])
             .WithOutput(output)
@@ -26,12 +28,98 @@ public sealed class InfrastructureTests
     }
 
     [Fact]
+    public async Task DuplicateDefinitionIdsFailBeforeGraphConstructionWithBothRuleTypesNamed()
+    {
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
+        var exitCode = await BuildToolApp.Create([])
+            .WithOutput(output, error)
+            .AddRules<DuplicateDefinitionRules>()
+            .RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, exitCode);
+        Assert.Contains("RBT2101", error.ToString(), StringComparison.Ordinal);
+        Assert.Contains("Multiple module rule types produce definition ID 'Collision'", error.ToString(),
+            StringComparison.Ordinal);
+        Assert.Contains(typeof(DuplicateDefinitions.Left.CollisionModule).FullName!, error.ToString(),
+            StringComparison.Ordinal);
+        Assert.Contains(typeof(DuplicateDefinitions.Right.CollisionModule).FullName!, error.ToString(),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task DuplicateGeneratedPathsFailBeforeAnyFileIsWritten()
+    {
+        var workspaceRoot = Path.Combine(Path.GetTempPath(), $"RoxyDuplicateOutput-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(workspaceRoot);
+        try
+        {
+            using var output = new StringWriter();
+            using var error = new StringWriter();
+            var app = BuildToolApp.Create([
+                    "generate", "ReflectedWorkspace", "--workspace", "Duplicate",
+                ])
+                .WithWorkspaceRoot(workspaceRoot)
+                .WithOutput(output, error)
+                .DiscoverRulesFromAssemblyContaining<ReflectedRulesMarker>()
+                .UseWindowsPlatform();
+            app.AddService<IWorkspaceGenerator>(new DuplicateOutputGenerator());
+
+            var exitCode = await app.RunAsync(TestContext.Current.CancellationToken);
+
+            Assert.Equal(2, exitCode);
+            Assert.Contains("RBT4001", error.ToString(), StringComparison.Ordinal);
+            Assert.False(Directory.Exists(Path.Combine(workspaceRoot, ".roxy", "generated")));
+        }
+        finally
+        {
+            Directory.Delete(workspaceRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task UnsupportedLinkModelFailsBeforeGeneratorOrExternalToolExecution()
+    {
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+
+        var exitCode = await BuildToolApp.Create([
+                "generate", "UnsupportedLinkWorkspace", "--workspace", "Vs2022",
+            ])
+            .WithOutput(output, error)
+            .AddRules<UnsupportedLinkRules>()
+            .UseWindowsPlatform()
+            .UseVisualStudio()
+            .RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, exitCode);
+        Assert.Contains("RBT1104", error.ToString(), StringComparison.Ordinal);
+        Assert.Contains("Monolithic", error.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task UnregisteredRuleReferencesHaveAStableDefinitionDiagnostic()
+    {
+        using var error = new StringWriter();
+
+        var exitCode = await BuildToolApp.Create([])
+            .WithOutput(new StringWriter(), error)
+            .AddRules<MissingReferenceRules>()
+            .RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, exitCode);
+        Assert.Contains("RBT2102", error.ToString(), StringComparison.Ordinal);
+        Assert.Contains("Unregistered", error.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RuleBaseTypesAreMarkersWithoutConfigureEntryPoints()
     {
-        Assert.DoesNotContain(typeof(global::RoxyBuildTool.CxxModule).GetMethods(), method => method.Name == "Configure");
-        Assert.DoesNotContain(typeof(global::RoxyBuildTool.CSharpModule).GetMethods(), method => method.Name == "Configure");
-        Assert.DoesNotContain(typeof(global::RoxyBuildTool.BuildTarget).GetMethods(), method => method.Name == "Configure");
-        Assert.DoesNotContain(typeof(global::RoxyBuildTool.BuildWorkspace).GetMethods(), method => method.Name == "Configure");
+        Assert.DoesNotContain(typeof(CxxModule).GetMethods(), method => method.Name == "Configure");
+        Assert.DoesNotContain(typeof(CSharpModule).GetMethods(), method => method.Name == "Configure");
+        Assert.DoesNotContain(typeof(BuildTarget).GetMethods(), method => method.Name == "Configure");
+        Assert.DoesNotContain(typeof(BuildWorkspace).GetMethods(), method => method.Name == "Configure");
     }
 
     [Fact]
@@ -114,48 +202,146 @@ public sealed class InfrastructureTests
         {
             directory = directory.Parent;
         }
+
         return directory?.FullName ?? throw new InvalidOperationException("Repository root was not found.");
     }
 }
 
 public sealed class ReflectedRulesMarker;
 
-public sealed class ReflectedHeaderModule : global::RoxyBuildTool.CxxModule
+public sealed class DuplicateDefinitionRules : IRulesModule
 {
-    [global::RoxyBuildTool.Configure]
-    private static void ConfigureAll(global::RoxyBuildTool.ModuleRules rules) =>
-        rules.Output = global::RoxyBuildTool.CxxOutput.HeaderOnly;
+    public void Register(BuildRegistry registry)
+    {
+        registry.AddModule<DuplicateDefinitions.Left.CollisionModule>();
+        registry.AddModule<DuplicateDefinitions.Right.CollisionModule>();
+    }
+}
 
-    [global::RoxyBuildTool.Configure("profile", "debug", Priority = 100)]
-    private static void ConfigureDebug(global::RoxyBuildTool.ModuleRules rules) =>
+public sealed class DuplicateOutputGenerator : IWorkspaceGenerator
+{
+    public WorkspaceGeneratorId Id { get; } = new("Duplicate");
+    public CapabilitySet Capabilities { get; } = CapabilitySet.Empty;
+
+    public GenerationResult Generate(WorkspaceModel workspace, GenerationContext context) => new(
+        Id,
+        [new(new("same.txt"), "first"), new(new("same.txt"), "second")],
+        []);
+}
+
+public sealed class UnsupportedLinkRules : IRulesModule
+{
+    public void Register(BuildRegistry registry)
+    {
+        registry.AddModule<UnsupportedLinkModule>();
+        registry.AddTarget<UnsupportedLinkTarget>();
+        registry.AddWorkspace<UnsupportedLinkWorkspace>();
+    }
+}
+
+public sealed class MissingReferenceRules : IRulesModule
+{
+    public void Register(BuildRegistry registry) =>
+        registry.AddModule<MissingReferenceModule>();
+}
+
+[BuildRuleIgnore]
+public sealed class MissingReferenceModule : CxxModule
+{
+    [Configure]
+    private static void Configure(ModuleRules rules) =>
+        rules.Dependencies.Private<UnregisteredModule>();
+}
+
+[BuildRuleIgnore]
+public sealed class UnregisteredModule : CxxModule;
+
+[BuildRuleIgnore]
+public sealed class UnsupportedLinkModule : CxxModule
+{
+    [Configure]
+    private static void Configure(ModuleRules rules) =>
+        rules.Output = CxxOutput.HeaderOnly;
+}
+
+[BuildRuleIgnore]
+public sealed class UnsupportedLinkTarget : BuildTarget
+{
+    [Configure]
+    private static void Configure(TargetRules rules)
+    {
+        rules.RootModules.Add<UnsupportedLinkModule>();
+        rules.Matrix
+            .Axis(Configuration.Platforms.Windows)
+            .Axis(Architectures.X64)
+            .Axis(BuildProfiles.Debug)
+            .Axis(Configuration.Toolchains.Msvc)
+            .Axis(LinkModels.Monolithic);
+    }
+}
+
+[BuildRuleIgnore]
+public sealed class UnsupportedLinkWorkspace : BuildWorkspace
+{
+    [Configure]
+    private static void Configure(WorkspaceRules rules)
+    {
+        rules.Targets.Add<UnsupportedLinkTarget>();
+        rules.IncludeBuildHost = false;
+    }
+}
+
+public static class DuplicateDefinitions
+{
+    public static class Left
+    {
+        [BuildRuleIgnore]
+        public sealed class CollisionModule : CxxModule;
+    }
+
+    public static class Right
+    {
+        [BuildRuleIgnore]
+        public sealed class CollisionModule : CxxModule;
+    }
+}
+
+public sealed class ReflectedHeaderModule : CxxModule
+{
+    [Configure]
+    private static void ConfigureAll(ModuleRules rules) =>
+        rules.Output = CxxOutput.HeaderOnly;
+
+    [Configure("profile", "debug", Priority = 100)]
+    private static void ConfigureDebug(ModuleRules rules) =>
         rules.Private.Defines.Add("REFLECTED_DEBUG=1");
 }
 
-public abstract class ReflectedTargetBase : global::RoxyBuildTool.BuildTarget
+public abstract class ReflectedTargetBase : BuildTarget
 {
-    [global::RoxyBuildTool.Configure(Priority = -100)]
-    protected static void ConfigureWindows(global::RoxyBuildTool.TargetRules rules)
+    [Configure(Priority = -100)]
+    protected static void ConfigureWindows(TargetRules rules)
     {
         rules.Matrix
-            .Axis(RoxyBuildTool.Configuration.Platforms.Windows)
+            .Axis(Configuration.Platforms.Windows)
             .Axis(Architectures.X64)
             .Axis(BuildProfiles.Debug)
-            .Axis(RoxyBuildTool.Configuration.Toolchains.Msvc)
+            .Axis(Configuration.Toolchains.Msvc)
             .Axis(LinkModels.Modular);
     }
 }
 
 public sealed class ReflectedTarget : ReflectedTargetBase
 {
-    [global::RoxyBuildTool.Configure]
-    private static void ConfigureTarget(global::RoxyBuildTool.TargetRules rules) =>
+    [Configure]
+    private static void ConfigureTarget(TargetRules rules) =>
         rules.RootModules.Add<ReflectedHeaderModule>();
 }
 
-public sealed class ReflectedWorkspace : global::RoxyBuildTool.BuildWorkspace
+public sealed class ReflectedWorkspace : BuildWorkspace
 {
-    [global::RoxyBuildTool.Configure]
-    private static void ConfigureWorkspace(global::RoxyBuildTool.WorkspaceRules rules)
+    [Configure]
+    private static void ConfigureWorkspace(WorkspaceRules rules)
     {
         rules.Targets.Add<ReflectedTarget>();
         rules.StartupTarget<ReflectedTarget>();

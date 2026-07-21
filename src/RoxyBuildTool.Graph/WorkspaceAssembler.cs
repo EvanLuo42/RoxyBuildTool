@@ -48,6 +48,18 @@ public static class WorkspaceAssembler
                             .Select(dependency => FragmentRegistry.ToPascalCase($"{targetId}.{dependency.Module}"))
                             .Distinct(StringComparer.Ordinal)
                             .Order(StringComparer.Ordinal)
+                    ],
+                    DependencyVariants:
+                    [
+                        ..group.SelectMany(pair => pair.module.Dependencies.Select(dependency =>
+                                new WorkspaceProjectDependencyVariant(
+                                    pair.graph.Target.Id,
+                                    pair.graph.Configuration,
+                                    FragmentRegistry.ToPascalCase(
+                                        $"{pair.graph.Target.Id}.{dependency.Module}"))))
+                            .Distinct()
+                            .OrderBy(dependency => dependency.ProjectId, StringComparer.Ordinal)
+                            .ThenBy(dependency => dependency.Configuration)
                     ]);
             })
             .OrderBy(project => project.Id, StringComparer.Ordinal)
@@ -58,7 +70,10 @@ public static class WorkspaceAssembler
         [
             ..projects.Select(project => project with
             {
-                ProjectDependencies = [..project.ProjectDependencies.Where(projectIds.Contains)]
+                ProjectDependencies = [..project.ProjectDependencies.Where(projectIds.Contains)],
+                DependencyVariants = project.DependencyVariants.IsDefault
+                    ? []
+                    : [..project.DependencyVariants.Where(dependency => projectIds.Contains(dependency.ProjectId))]
             })
         ];
 

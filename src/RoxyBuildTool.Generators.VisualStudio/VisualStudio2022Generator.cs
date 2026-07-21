@@ -41,7 +41,7 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator
             if (project.Language == ModuleLanguage.Cxx)
             {
                 files.Add(new GeneratedFile(new LogicalPath($"{ProjectFileStem(project)}.vcxproj"),
-                    GenerateVcxproj(project, projectsById, context)));
+                    GenerateVcxproj(workspace, project, projectsById, context)));
                 files.Add(new GeneratedFile(new LogicalPath($"{ProjectFileStem(project)}.vcxproj.filters"),
                     GenerateFilters(project, context)));
             }
@@ -74,10 +74,11 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator
                 : $"{ProjectFileStem(project)}.{ProjectExtension(project)}";
             builder.AppendLine(CultureInfo.InvariantCulture,
                 $"Project(\"{{{typeGuid.ToString().ToUpperInvariant()}}}\") = \"{ProjectFileStem(project)}\", \"{path}\", \"{{{projectGuid.ToString().ToUpperInvariant()}}}\"");
-            if (!project.ProjectDependencies.IsEmpty)
+            var solutionDependencies = SolutionDependencies(project);
+            if (!solutionDependencies.IsEmpty)
             {
                 builder.AppendLine("\tProjectSection(ProjectDependencies) = postProject");
-                foreach (var dependency in project.ProjectDependencies.Order(StringComparer.Ordinal))
+                foreach (var dependency in solutionDependencies)
                 {
                     var dependencyGuid = ProjectGuid(dependency).ToString().ToUpperInvariant();
                     builder.AppendLine(CultureInfo.InvariantCulture,
@@ -111,7 +112,8 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator
                     : DisplayName(MapProjectConfiguration(project, configuration.Key));
                 builder.AppendLine(CultureInfo.InvariantCulture,
                     $"\t\t{{{guid}}}.{configuration.Name}|{SolutionPlatformName}.ActiveCfg = {mapped}|{(project.IsBuildHost ? "Any CPU" : "x64")}");
-                if (!project.IsBuildHost)
+                if (!project.IsBuildHost && project.Variants.Any(variant =>
+                        variant.Configuration.Canonical == configuration.Key.Canonical))
                 {
                     builder.AppendLine(CultureInfo.InvariantCulture,
                         $"\t\t{{{guid}}}.{configuration.Name}|{SolutionPlatformName}.Build.0 = {mapped}|x64");
@@ -125,6 +127,7 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator
     }
 
     private static string GenerateVcxproj(
+        WorkspaceModel workspace,
         WorkspaceProject project,
         IReadOnlyDictionary<string, WorkspaceProject> projectsById,
         GenerationContext context)
@@ -152,12 +155,13 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator
         foreach (var variant in project.Variants)
         {
             var profile = Fragment(variant.Configuration, "Profile");
+            var toolchain = ToolchainSettings(workspace, variant);
             root.Add(new XElement(MsBuild + "PropertyGroup",
                 new XAttribute("Condition", Condition(variant)),
                 new XAttribute("Label", "Configuration"),
                 new XElement(MsBuild + "ConfigurationType", ConfigurationType(variant.Module.Kind)),
                 new XElement(MsBuild + "UseDebugLibraries", profile == "Debug" ? "true" : "false"),
-                new XElement(MsBuild + "PlatformToolset", "v143"),
+                new XElement(MsBuild + "PlatformToolset", toolchain.VisualStudioPlatformToolset),
                 new XElement(MsBuild + "CharacterSet", "Unicode")));
         }
 
@@ -166,10 +170,11 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator
         foreach (var variant in project.Variants)
         {
             var profile = Fragment(variant.Configuration, "Profile");
+            var toolchain = ToolchainSettings(workspace, variant);
             var outputRoot =
-                $@"$(RoxyWorkspaceRoot)\out\windows\x64\{profile.ToLowerInvariant()}\{variant.Target}\";
+                $@"$(RoxyWorkspaceRoot)\{ToWindows(BuildPathLayout.OutputRoot(variant.Configuration, variant.Target))}\";
             var intermediate =
-                $@"$(RoxyWorkspaceRoot)\intermediate\{variant.Configuration.ShortHash}\{variant.Target}.{variant.Module.Id}\";
+                $@"$(RoxyWorkspaceRoot)\{ToWindows(BuildPathLayout.IntermediateRoot(variant.Configuration, variant.Target))}\{variant.Module.Id}\";
             root.Add(new XElement(MsBuild + "PropertyGroup",
                 new XAttribute("Condition", Condition(variant)),
                 new XElement(MsBuild + "OutDir", outputRoot),
@@ -188,26 +193,46 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator
                     "AdditionalIncludeDirectories")),
                 new XElement(MsBuild + "PreprocessorDefinitions", JoinMsbuild(
                     variant.Module.CompileUsage.Defines.Select(value => value.Value),
-                    "PreprocessorDefinitions")));
+                    "PreprocessorDefinitions")),
+                new XElement(MsBuild + "AdditionalOptions",
+                    JoinCommandLine(toolchain.CompileArguments, "%(AdditionalOptions)")));
             var definitions = new XElement(MsBuild + "ItemDefinitionGroup",
                 new XAttribute("Condition", Condition(variant)),
                 compile);
+            if (variant.Module.Sources.Any(source => BuildFileKinds.IsResource(source.Value)))
+            {
+                definitions.Add(new XElement(MsBuild + "ResourceCompile",
+                    new XElement(MsBuild + "AdditionalIncludeDirectories", JoinMsbuild(
+                        variant.Module.CompileUsage.IncludeDirectories.Select(value =>
+                            $"$(RoxyWorkspaceRoot)\\{ToWindows(value.Value)}"),
+                        "AdditionalIncludeDirectories")),
+                    new XElement(MsBuild + "PreprocessorDefinitions", JoinMsbuild(
+                        toolchain.CompileArguments
+                            .Where(argument => argument.StartsWith("/D", StringComparison.OrdinalIgnoreCase))
+                            .Select(argument => argument[2..])
+                            .Concat(variant.Module.CompileUsage.Defines.Select(value => value.Value)),
+                        "PreprocessorDefinitions"))));
+            }
+
             if (variant.Module.Kind is ModuleKind.Executable or ModuleKind.SharedLibrary)
             {
                 definitions.Add(new XElement(MsBuild + "Link",
                     new XElement(MsBuild + "AdditionalDependencies", JoinMsbuild(
-                        variant.Module.CompileUsage.LinkInputs.Select(value =>
-                            $"$(RoxyWorkspaceRoot)\\{ToWindows(value.Value)}"),
+                        variant.Module.CompileUsage.LinkInputs.Select(value => FormatLinkInput(value.Value)),
                         "AdditionalDependencies")),
-                    new XElement(MsBuild + "GenerateDebugInformation", "true")));
+                    new XElement(MsBuild + "GenerateDebugInformation", "true"),
+                    new XElement(MsBuild + "AdditionalOptions",
+                        JoinCommandLine(toolchain.LinkArguments, "%(AdditionalOptions)"))));
             }
 
             root.Add(definitions);
         }
 
-        root.Add(new XElement(MsBuild + "ItemGroup",
-            Sources(project).Select(source => new XElement(MsBuild + "ClCompile",
-                new XAttribute("Include", ToWindows(RelativeFromOutput(context, source.Value)))))));
+        foreach (var itemGroup in CreateNativeSourceItemGroups(project, context))
+        {
+            root.Add(itemGroup);
+        }
+
         var references = CreateProjectReferences(project, projectsById, MsBuild);
         if (references is not null)
         {
@@ -225,33 +250,53 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator
         GenerationContext context)
     {
         var representative = project.Variants[0].Module;
-        var root = new XElement("Project", new XAttribute("Sdk", "Microsoft.NET.Sdk"),
-            new XElement("PropertyGroup",
-                new XElement("OutputType",
-                    representative.Kind == ModuleKind.CSharpConsoleApplication ? "Exe" : "Library"),
-                new XElement("TargetFramework", representative.TargetFrameworks.FirstOrDefault() ?? "net10.0"),
-                new XElement("LangVersion", "14.0"),
-                new XElement("Nullable", "enable"),
-                new XElement("ImplicitUsings", "enable"),
-                new XElement("Deterministic", "true"),
-                new XElement("ManagePackageVersionsCentrally", "false"),
-                new XElement("RestorePackagesWithLockFile", "true"),
-                new XElement("NuGetLockFilePath", "$(BaseIntermediateOutputPath)packages.lock.json"),
-                new XElement("EnableDefaultItems", "false"),
-                new XElement("AssemblyName", representative.Id),
-                new XElement("RootNamespace", representative.RootNamespace ?? project.Name.Replace(' ', '.')),
-                new XElement("RoxyWorkspaceRoot", ToWindows(RelativeFromOutput(context, ".")))));
+        var targetFrameworks = TargetFrameworks(representative);
+        var commonTargetFrameworks = project.Variants.All(variant =>
+            TargetFrameworks(variant.Module).SequenceEqual(targetFrameworks, StringComparer.Ordinal));
+        var outputType = ManagedOutputType(representative);
+        var commonOutputType = project.Variants.All(variant => ManagedOutputType(variant.Module) == outputType);
+        var rootNamespace = ManagedRootNamespace(project, representative);
+        var commonRootNamespace = project.Variants.All(variant =>
+            ManagedRootNamespace(project, variant.Module) == rootNamespace);
+        var properties = new XElement("PropertyGroup",
+            new XElement("LangVersion", "14.0"),
+            new XElement("Nullable", "enable"),
+            new XElement("ImplicitUsings", "enable"),
+            new XElement("Deterministic", "true"),
+            new XElement("ManagePackageVersionsCentrally", "false"),
+            new XElement("RestorePackagesWithLockFile", "true"),
+            new XElement("NuGetLockFilePath", "$(BaseIntermediateOutputPath)packages.lock.json"),
+            new XElement("EnableDefaultItems", "false"),
+            new XElement("Platforms", "x64"),
+            new XElement("AssemblyName", representative.Id),
+            new XElement("RoxyWorkspaceRoot", ToWindows(RelativeFromOutput(context, "."))));
+        if (commonOutputType)
+            properties.Add(new XElement("OutputType", outputType));
+        if (commonRootNamespace)
+            properties.Add(new XElement("RootNamespace", rootNamespace));
+        if (commonTargetFrameworks)
+            AddTargetFrameworks(properties, targetFrameworks);
+
+        var root = new XElement("Project", new XAttribute("Sdk", "Microsoft.NET.Sdk"), properties);
 
         foreach (var variant in project.Variants)
         {
             var profile = Fragment(variant.Configuration, "Profile");
-            root.Add(new XElement("PropertyGroup",
+            var variantProperties = new XElement("PropertyGroup",
                 new XAttribute("Condition", Condition(variant)),
                 new XElement("Optimize", profile == "Debug" ? "false" : "true"),
                 new XElement("OutputPath",
-                    $@"$(RoxyWorkspaceRoot)\out\windows\x64\{profile.ToLowerInvariant()}\{variant.Target}\{variant.Module.Id}\"),
+                    $@"$(RoxyWorkspaceRoot)\{ToWindows(BuildPathLayout.OutputRoot(variant.Configuration, variant.Target))}\{variant.Module.Id}\"),
                 new XElement("IntermediateOutputPath",
-                    $@"$(RoxyWorkspaceRoot)\intermediate\{variant.Configuration.ShortHash}\{variant.Target}.{variant.Module.Id}\")));
+                    $@"$(RoxyWorkspaceRoot)\{ToWindows(BuildPathLayout.IntermediateRoot(variant.Configuration, variant.Target))}\{variant.Module.Id}\"));
+            if (!commonTargetFrameworks)
+                AddTargetFrameworks(variantProperties, TargetFrameworks(variant.Module));
+            if (!commonOutputType)
+                variantProperties.Add(new XElement("OutputType", ManagedOutputType(variant.Module)));
+            if (!commonRootNamespace)
+                variantProperties.Add(new XElement("RootNamespace", ManagedRootNamespace(project, variant.Module)));
+
+            root.Add(variantProperties);
             if (!variant.Module.CompileUsage.RuntimeFiles.IsEmpty)
             {
                 root.Add(new XElement("ItemGroup",
@@ -265,21 +310,30 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator
             }
         }
 
-        root.Add(new XElement("ItemGroup",
-            Sources(project).Select(source => new XElement("Compile",
-                new XAttribute("Include", ToWindows(RelativeFromOutput(context, source.Value)))))));
+        root.Add(new XElement("ItemGroup", SourceVariants(project).Select(item =>
+        {
+            var element = new XElement("Compile",
+                new XAttribute("Include", ToWindows(RelativeFromOutput(context, item.Source.Value))));
+            AddVariantCondition(element, project, item.Variants);
+            return element;
+        })));
         var references = CreateProjectReferences(project, projectsById, XNamespace.None);
         if (references is not null)
         {
             root.Add(references);
         }
 
-        var packages = project.Variants.SelectMany(variant => variant.Module.Packages).Distinct()
-            .OrderBy(package => package.Id, StringComparer.Ordinal).ToImmutableArray();
+        var packages = project.Variants
+            .SelectMany(variant => variant.Module.Packages.Select(package => (Variant: variant, Package: package)))
+            .GroupBy(item => item.Package)
+            .OrderBy(group => group.Key.Id, StringComparer.Ordinal)
+            .ThenBy(group => group.Key.Version, StringComparer.Ordinal)
+            .ToImmutableArray();
         if (!packages.IsEmpty)
         {
-            root.Add(new XElement("ItemGroup", packages.Select(package =>
+            root.Add(new XElement("ItemGroup", packages.Select(group =>
             {
+                var package = group.Key;
                 var element = new XElement("PackageReference",
                     new XAttribute("Include", package.Id),
                     new XAttribute("Version", package.Version));
@@ -288,6 +342,8 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator
                     element.Add(new XAttribute("PrivateAssets", "all"));
                 }
 
+                AddVariantCondition(element, project,
+                    [.. group.Select(item => item.Variant).Distinct()]);
                 return element;
             })));
         }
@@ -297,11 +353,14 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator
 
     private static string GenerateFilters(WorkspaceProject project, GenerationContext context)
     {
-        var root = new XElement(MsBuild + "Project",
-            new XAttribute("ToolsVersion", "4.0"),
-            new XElement(MsBuild + "ItemGroup",
-                Sources(project).Select(source => new XElement(MsBuild + "ClCompile",
+        var root = new XElement(MsBuild + "Project", new XAttribute("ToolsVersion", "4.0"));
+        foreach (var group in Sources(project).GroupBy(NativeItemName, StringComparer.Ordinal))
+        {
+            root.Add(new XElement(MsBuild + "ItemGroup", group.Select(source =>
+                new XElement(MsBuild + group.Key,
                     new XAttribute("Include", ToWindows(RelativeFromOutput(context, source.Value)))))));
+        }
+
         return Serialize(new XDocument(new XDeclaration("1.0", "utf-8", null), root));
     }
 
@@ -327,11 +386,19 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator
                         $"{ProjectFileStem(dependencyProject)}.{ProjectExtension(dependencyProject)}"),
                     new XElement(xmlNamespace + "Project",
                         $"{{{ProjectGuid(dependency).ToString().ToUpperInvariant()}}}"));
+                AddVariantCondition(reference, project, ReferenceVariants(project, dependency));
                 if (dependencyProject.Language != project.Language)
                 {
                     reference.Add(
                         new XElement(xmlNamespace + "ReferenceOutputAssembly", "false"),
                         new XElement(xmlNamespace + "SkipGetTargetFrameworkProperties", "true"));
+                }
+
+                if (project.Language == ModuleLanguage.Cxx && dependencyProject.Language == ModuleLanguage.Cxx)
+                {
+                    // Native link inputs are explicit usage requirements. Project references provide ordering only;
+                    // implicit library linking would duplicate normal inputs and incorrectly link build-order edges.
+                    reference.Add(new XElement(xmlNamespace + "LinkLibraryDependencies", "false"));
                 }
 
                 return reference;
@@ -345,7 +412,7 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator
                 new XAttribute("Condition", "'$(MSBuildProjectExtension)'=='.csproj'"),
                 new XElement("RoxyWorkspaceRoot", ToWindows(RelativeFromOutput(context, "."))),
                 new XElement("BaseIntermediateOutputPath",
-                    @"$(RoxyWorkspaceRoot)\intermediate\msbuild\$(MSBuildProjectName)\")));
+                    @"$(RoxyWorkspaceRoot)\intermediate\msbuild\$(MSBuildProjectName)\$(Configuration)\")));
         return Serialize(new XDocument(root));
     }
 
@@ -360,6 +427,114 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator
         ];
     }
 
+    private static ImmutableArray<SourceVariantGroup> SourceVariants(WorkspaceProject project) =>
+    [
+        .. project.Variants
+            .SelectMany(variant => variant.Module.Sources.Select(source => (Variant: variant, Source: source)))
+            .GroupBy(item => item.Source)
+            .Select(group => new SourceVariantGroup(
+                group.Key,
+                [
+                    .. group.Select(item => item.Variant).Distinct()
+                        .OrderBy(variant => variant.Configuration)
+                ]))
+            .OrderBy(group => group.Source.Value, StringComparer.Ordinal)
+    ];
+
+    private static IEnumerable<XElement> CreateNativeSourceItemGroups(
+        WorkspaceProject project,
+        GenerationContext context) => SourceVariants(project)
+        .GroupBy(group => NativeItemName(group.Source), StringComparer.Ordinal)
+        .Select(group => new XElement(MsBuild + "ItemGroup", group.Select(item =>
+        {
+            var element = new XElement(MsBuild + group.Key,
+                new XAttribute("Include", ToWindows(RelativeFromOutput(context, item.Source.Value))));
+            AddVariantCondition(element, project, item.Variants);
+            if (group.Key is "ClCompile" or "ResourceCompile")
+            {
+                foreach (var variant in item.Variants.Where(variant =>
+                             variant.Module.Kind == ModuleKind.HeaderOnly))
+                {
+                    element.Add(new XElement(MsBuild + "ExcludedFromBuild",
+                        new XAttribute("Condition", Condition(variant)), "true"));
+                }
+            }
+
+            if (group.Key == "ClCompile")
+            {
+                foreach (var variant in item.Variants)
+                {
+                    element.Add(new XElement(MsBuild + "ObjectFileName",
+                        new XAttribute("Condition", Condition(variant)),
+                        $@"$(RoxyWorkspaceRoot)\{ToWindows(BuildPathLayout.ObjectFile(
+                            variant.Configuration, variant.Target, variant.Module.Id, item.Source))}"));
+                }
+            }
+            else if (group.Key == "ResourceCompile")
+            {
+                foreach (var variant in item.Variants)
+                {
+                    element.Add(new XElement(MsBuild + "ResourceOutputFileName",
+                        new XAttribute("Condition", Condition(variant)),
+                        $@"$(RoxyWorkspaceRoot)\{ToWindows(BuildPathLayout.ResourceFile(
+                            variant.Configuration, variant.Target, variant.Module.Id, item.Source))}"));
+                }
+            }
+
+            return element;
+        })));
+
+    private static string NativeItemName(LogicalPath source) => source.Value switch
+    {
+        var value when BuildFileKinds.IsCxxSource(value) => "ClCompile",
+        var value when BuildFileKinds.IsHeader(value) => "ClInclude",
+        var value when BuildFileKinds.IsResource(value) => "ResourceCompile",
+        _ => "None",
+    };
+
+    private static ImmutableArray<WorkspaceProjectVariant> ReferenceVariants(
+        WorkspaceProject project,
+        string dependency)
+    {
+        if (project.DependencyVariants.IsDefaultOrEmpty)
+            return project.Variants;
+
+        var identities = project.DependencyVariants
+            .Where(item => item.ProjectId == dependency)
+            .Select(item => (item.Target, item.Configuration))
+            .ToHashSet();
+        return
+        [
+            .. project.Variants.Where(variant => identities.Contains((variant.Target, variant.Configuration)))
+        ];
+    }
+
+    private static ImmutableArray<string> SolutionDependencies(WorkspaceProject project)
+    {
+        if (project.DependencyVariants.IsDefaultOrEmpty)
+            return [.. project.ProjectDependencies.Order(StringComparer.Ordinal)];
+
+        return
+        [
+            .. project.ProjectDependencies
+                .Where(dependency => ReferenceVariants(project, dependency).Length == project.Variants.Length)
+                .Order(StringComparer.Ordinal)
+        ];
+    }
+
+    private static void AddVariantCondition(
+        XElement element,
+        WorkspaceProject project,
+        ImmutableArray<WorkspaceProjectVariant> variants)
+    {
+        if (variants.Length == project.Variants.Length)
+            return;
+
+        element.Add(new XAttribute("Condition", string.Join(" Or ", variants
+            .OrderBy(variant => variant.Configuration)
+            .Select(Condition))));
+    }
+
     private static ImmutableArray<SolutionConfiguration> WorkspaceConfigurations(WorkspaceModel workspace)
     {
         return
@@ -367,9 +542,9 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator
             ..workspace
                 .Projects
                 .SelectMany(project => project.Variants)
-                .GroupBy(DisplayName, StringComparer.Ordinal)
+                .GroupBy(variant => variant.Configuration.Canonical, StringComparer.Ordinal)
                 .Select(group => new SolutionConfiguration(
-                    group.Key,
+                    DisplayName(group.First()),
                     group.OrderBy(variant => variant.Configuration)
                         .ThenBy(variant => variant.Target, StringComparer.Ordinal)
                         .First().Configuration))
@@ -399,15 +574,8 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator
     private static int SharedFragmentCount(ConfigurationKey left, ConfigurationKey right) =>
         left.Values.Count(value => right.Is(value));
 
-    private static string DisplayName(WorkspaceProjectVariant variant)
-    {
-        var profile = Fragment(variant.Configuration, "Profile");
-        var custom = variant.Configuration.Values
-            .Where(value =>
-                value.Fragment.Value is not ("Platform" or "Architecture" or "Profile" or "Toolchain" or "LinkModel"))
-            .Select(value => value.Value);
-        return string.Join(' ', new[] { ToPascalCase(profile) }.Concat(custom.Select(ToPascalCase)));
-    }
+    private static string DisplayName(WorkspaceProjectVariant variant) =>
+        BuildConfigurationNames.DisplayName(variant.Configuration);
 
     private static string Condition(WorkspaceProjectVariant variant) =>
         $"'$(Configuration)|$(Platform)'=='{DisplayName(variant)}|x64'";
@@ -444,8 +612,39 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator
 
     private static Guid ProjectGuid(string id) => new(SHA256.HashData(Encoding.UTF8.GetBytes($"roxy:{id}"))[..16]);
 
+    private static ToolchainBuildSettings ToolchainSettings(
+        WorkspaceModel workspace,
+        WorkspaceProjectVariant variant) => workspace.ActionGraphs
+        .SingleOrDefault(graph => graph.Target == variant.Target && graph.Configuration == variant.Configuration)
+        ?.Toolchain ?? new ToolchainBuildSettings("Unknown", "v143", [], []);
+
     private static string JoinMsbuild(IEnumerable<string> values, string inheritedMetadata) =>
         string.Join(';', values.Append($"%({inheritedMetadata})"));
+
+    private static string JoinCommandLine(IEnumerable<string> values, string inheritedValue) =>
+        string.Join(' ', values.Append(inheritedValue));
+
+    private static ImmutableArray<string> TargetFrameworks(ConfiguredModule module) => module.TargetFrameworks
+        .DefaultIfEmpty("net10.0")
+        .Distinct(StringComparer.Ordinal)
+        .Order(StringComparer.Ordinal)
+        .ToImmutableArray();
+
+    private static void AddTargetFrameworks(XElement propertyGroup, ImmutableArray<string> frameworks) =>
+        propertyGroup.Add(frameworks.Length == 1
+            ? new XElement("TargetFramework", frameworks[0])
+            : new XElement("TargetFrameworks", string.Join(';', frameworks)));
+
+    private static string ManagedOutputType(ConfiguredModule module) =>
+        module.Kind == ModuleKind.CSharpConsoleApplication ? "Exe" : "Library";
+
+    private static string ManagedRootNamespace(WorkspaceProject project, ConfiguredModule module) =>
+        module.RootNamespace ?? project.Name.Replace(' ', '.');
+
+    private static string FormatLinkInput(string value) => Path.IsPathRooted(value) ||
+                                                           !value.Contains('/') && !value.Contains('\\')
+        ? value
+        : $"$(RoxyWorkspaceRoot)\\{ToWindows(value)}";
 
     private static string RelativeFromOutput(GenerationContext context, string logicalPath) =>
         Path.GetRelativePath(context.OutputDirectory.Value, logicalPath).Replace('\\', '/');
@@ -455,6 +654,10 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator
     private static string Normalize(string value) => value.Replace("\r\n", "\n", StringComparison.Ordinal);
 
     private sealed record SolutionConfiguration(string Name, ConfigurationKey Key);
+
+    private sealed record SourceVariantGroup(
+        LogicalPath Source,
+        ImmutableArray<WorkspaceProjectVariant> Variants);
 }
 
 /// <summary>Registers the Visual Studio workspace generator.</summary>

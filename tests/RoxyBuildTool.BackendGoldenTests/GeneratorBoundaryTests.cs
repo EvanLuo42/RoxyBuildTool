@@ -19,26 +19,33 @@ public sealed class GeneratorBoundaryTests
     {
         var debug = Configuration(BuildProfiles.Debug);
         var release = Configuration(BuildProfiles.Release);
-        var header = Module("header", "HeaderModule", ModuleKind.HeaderOnly, ["include/header.h"]);
-        var objects = Module("objects", "Objects", ModuleKind.ObjectLibrary, ["src/z.cpp", "src/a.cpp"]);
+        var header = Module("header", "HeaderModule", ModuleKind.HeaderOnly,
+            ["include/header.h", "src/header-metadata.cpp"]);
+        var objects = Module("objects", "Objects", ModuleKind.ObjectLibrary,
+            ["src/z.cpp", "src/a.cpp", "resources/objects.rc"]);
         var library = Module("library", "Library", ModuleKind.StaticLibrary, ["src/library.cpp"]);
         var shared = Module("shared", "Shared", ModuleKind.SharedLibrary, ["src/shared.cpp"]);
-        var debugExecutable = Module("application", "Application", ModuleKind.Executable, ["src/main.cpp"]) with
+        var debugExecutable = Module("application", "Application", ModuleKind.Executable,
+                ["src/main.cpp", "resources/application.rc"]) with
+            {
+                CompileUsage = new(
+                    [new("include/public", "test")],
+                    [new("APP=1", "test")],
+                    [new("out/library.lib", "test")],
+                    []),
+            };
+        var releaseExecutable = debugExecutable with
         {
-            CompileUsage = new(
-                [new("include/public", "test")],
-                [new("APP=1", "test")],
-                [new("out/library.lib", "test")],
-                []),
+            Sources = [new("src/main.cpp"), new("src/release.cpp"), new("resources/application.rc")],
         };
-        var releaseExecutable = debugExecutable with { Sources = [new("src/main.cpp"), new("src/release.cpp")] };
         var projects = new[]
         {
             Project("header", "HeaderModule", [new("app", debug, header)]),
             Project("objects", "Objects", [new("app", debug, objects)]),
-            Project("library", "Library", [new("app", debug, library)]),
+            Project("library", "Library", [new("app", debug, library)], ["objects"]),
             Project("shared", "Shared", [new("app", debug, shared)]),
-            Project("application", "Application", [new("app", debug, debugExecutable), new("app", release, releaseExecutable)], ["library"]),
+            Project("application", "Application",
+                [new("app", debug, debugExecutable), new("app", release, releaseExecutable)], ["library"]),
         };
         var model = new WorkspaceModel("Native", "app", [.. projects], [], []);
 
@@ -49,19 +56,30 @@ public sealed class GeneratorBoundaryTests
         Assert.Equal("StaticLibrary", ConfigurationType(result, "Library.vcxproj"));
         Assert.Equal("DynamicLibrary", ConfigurationType(result, "Shared.vcxproj"));
         Assert.Equal("Application", ConfigurationType(result, "Application.vcxproj"));
+        Assert.Equal("true", Parse(result, "Header.vcxproj")
+            .Descendants(MsBuild + "ClCompile").Single(element => element.Attribute("Include") is not null)
+            .Element(MsBuild + "ExcludedFromBuild")?.Value);
 
         var application = Parse(result, "Application.vcxproj");
         var configurations = application.Descendants(MsBuild + "PropertyGroup")
             .Where(element => (string?)element.Attribute("Label") == "Configuration").ToArray();
         Assert.Contains(configurations, group => group.Element(MsBuild + "UseDebugLibraries")?.Value == "true");
         Assert.Contains(configurations, group => group.Element(MsBuild + "UseDebugLibraries")?.Value == "false");
-        var compile = application.Descendants(MsBuild + "ClCompile").First(element => element.Element(MsBuild + "LanguageStandard") is not null);
-        Assert.Contains("$(RoxyWorkspaceRoot)\\include\\public", compile.Element(MsBuild + "AdditionalIncludeDirectories")?.Value, StringComparison.Ordinal);
+        var compile = application.Descendants(MsBuild + "ClCompile")
+            .First(element => element.Element(MsBuild + "LanguageStandard") is not null);
+        Assert.Contains("$(RoxyWorkspaceRoot)\\include\\public",
+            compile.Element(MsBuild + "AdditionalIncludeDirectories")?.Value, StringComparison.Ordinal);
         Assert.Contains("APP=1", compile.Element(MsBuild + "PreprocessorDefinitions")?.Value, StringComparison.Ordinal);
-        Assert.Contains(application.Descendants(MsBuild + "BasicRuntimeChecks"), element => element.Value == "EnableFastChecks");
+        Assert.Contains(application.Descendants(MsBuild + "BasicRuntimeChecks"),
+            element => element.Value == "EnableFastChecks");
+        var resourceDefinitions = application.Descendants(MsBuild + "ResourceCompile")
+            .First(element => element.Element(MsBuild + "PreprocessorDefinitions") is not null);
+        Assert.Contains("APP=1", resourceDefinitions.Element(MsBuild + "PreprocessorDefinitions")?.Value,
+            StringComparison.Ordinal);
         Assert.Contains(application.Descendants(MsBuild + "Optimization"), element => element.Value == "MaxSpeed");
         var link = Assert.Single(application.Descendants(MsBuild + "Link").Take(1));
-        Assert.Contains("out\\library.lib", link.Element(MsBuild + "AdditionalDependencies")?.Value, StringComparison.Ordinal);
+        Assert.Contains("out\\library.lib", link.Element(MsBuild + "AdditionalDependencies")?.Value,
+            StringComparison.Ordinal);
         Assert.Equal("true", link.Element(MsBuild + "GenerateDebugInformation")?.Value);
         Assert.Equal("Library.vcxproj",
             (string?)Assert.Single(application.Descendants(MsBuild + "ProjectReference")).Attribute("Include"));
@@ -70,12 +88,30 @@ public sealed class GeneratorBoundaryTests
             .Where(element => element.Attribute("Include") is not null)
             .Select(element => (string)element.Attribute("Include")!).ToArray();
         Assert.Equal(["..\\..\\..\\..\\src\\main.cpp", "..\\..\\..\\..\\src\\release.cpp"], sourceItems);
+        var releaseSource = application.Descendants(MsBuild + "ClCompile")
+            .Single(element =>
+                ((string?)element.Attribute("Include"))?.EndsWith("release.cpp", StringComparison.Ordinal) == true);
+        Assert.Equal(Condition(release), (string?)releaseSource.Attribute("Condition"));
+        Assert.Equal(2, application.Descendants(MsBuild + "OutDir").Select(element => element.Value)
+            .Distinct(StringComparer.Ordinal).Count());
+
+        var objectsProject = Parse(result, "Objects.vcxproj");
+        Assert.All(objectsProject.Descendants(MsBuild + "ClCompile")
+                .Where(element => element.Attribute("Include") is not null),
+            element => Assert.NotNull(element.Element(MsBuild + "ObjectFileName")));
+        Assert.NotNull(Assert.Single(objectsProject.Descendants(MsBuild + "ResourceCompile"),
+                element => element.Attribute("Include") is not null)
+            .Element(MsBuild + "ResourceOutputFileName"));
+        var libraryProject = Parse(result, "Library.vcxproj");
+        Assert.Equal("false", Assert.Single(libraryProject.Descendants(MsBuild + "ProjectReference"))
+            .Element(MsBuild + "LinkLibraryDependencies")?.Value);
         var filters = Parse(result, "Application.vcxproj.filters");
-        Assert.Equal(sourceItems, filters.Descendants(MsBuild + "ClCompile").Select(element => (string)element.Attribute("Include")!));
+        Assert.Equal(sourceItems,
+            filters.Descendants(MsBuild + "ClCompile").Select(element => (string)element.Attribute("Include")!));
 
         var solution = File(result, "Native.sln");
-        Assert.Contains("Debug|Win64", solution, StringComparison.Ordinal);
-        Assert.Contains("Release|Win64", solution, StringComparison.Ordinal);
+        Assert.Contains($"{BuildConfigurationNames.DisplayName(debug)}|Win64", solution, StringComparison.Ordinal);
+        Assert.Contains($"{BuildConfigurationNames.DisplayName(release)}|Win64", solution, StringComparison.Ordinal);
         Assert.DoesNotContain("Directory.Build.props", result.Files.Select(file => file.Path.Value));
     }
 
@@ -94,6 +130,9 @@ public sealed class GeneratorBoundaryTests
         {
             Sources = [new("managed/Library.cs"), new("managed/Shipping.cs")],
             Packages = [new("Public.Package", "1.0.0")],
+            TargetFrameworks = ["net9.0"],
+            Kind = ModuleKind.CSharpConsoleApplication,
+            RootNamespace = "Managed.Shipping",
         };
         var project = new WorkspaceProject("library", "Managed Library", ModuleLanguage.CSharp,
             [new("app", debug, debugModule), new("app", shipping, shippingModule)], []);
@@ -101,9 +140,16 @@ public sealed class GeneratorBoundaryTests
 
         var document = Parse(result, "ManagedLibrary.csproj");
 
-        Assert.Equal("Library", Assert.Single(document.Descendants("OutputType")).Value);
-        Assert.Equal("net10.0", Assert.Single(document.Descendants("TargetFramework")).Value);
-        Assert.Equal("Managed.Library", Assert.Single(document.Descendants("RootNamespace")).Value);
+        Assert.Equal(["Library", "Exe"], document.Descendants("OutputType").Select(element => element.Value));
+        var targetFrameworks = document.Descendants("TargetFramework").ToArray();
+        Assert.Equal(["net10.0", "net9.0"], targetFrameworks.Select(element => element.Value));
+        Assert.All(targetFrameworks, element => Assert.NotNull(element.Parent?.Attribute("Condition")));
+        Assert.Equal(["Managed.Library", "Managed.Shipping"],
+            document.Descendants("RootNamespace").Select(element => element.Value));
+        Assert.All(document.Descendants("OutputType"),
+            element => Assert.NotNull(element.Parent?.Attribute("Condition")));
+        Assert.All(document.Descendants("RootNamespace"),
+            element => Assert.NotNull(element.Parent?.Attribute("Condition")));
         Assert.Equal(["Library.cs", "Shipping.cs"], document.Descendants("Compile")
             .Select(element => Path.GetFileName((string)element.Attribute("Include")!)));
         Assert.Empty(document.Descendants("Content"));
@@ -112,11 +158,60 @@ public sealed class GeneratorBoundaryTests
         Assert.Equal("all", (string?)packages["Private.Package"].Attribute("PrivateAssets"));
         Assert.Null(packages["Public.Package"].Attribute("PrivateAssets"));
         Assert.Equal(2, packages.Count);
+        Assert.Equal(Condition(debug), (string?)packages["Private.Package"].Attribute("Condition"));
+        var shippingSource = document.Descendants("Compile")
+            .Single(element =>
+                ((string?)element.Attribute("Include"))?.EndsWith("Shipping.cs", StringComparison.Ordinal) == true);
+        Assert.Equal(Condition(shipping), (string?)shippingSource.Attribute("Condition"));
         Assert.Contains(document.Descendants("Optimize"), element => element.Value == "false");
         Assert.Contains(document.Descendants("Optimize"), element => element.Value == "true");
 
         var props = Parse(result, "Directory.Build.props");
-        Assert.Contains("intermediate\\msbuild", Assert.Single(props.Descendants("BaseIntermediateOutputPath")).Value, StringComparison.Ordinal);
+        Assert.Contains("intermediate\\msbuild", Assert.Single(props.Descendants("BaseIntermediateOutputPath")).Value,
+            StringComparison.Ordinal);
+        Assert.Contains("$(Configuration)", Assert.Single(props.Descendants("BaseIntermediateOutputPath")).Value,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void NativeGenerationKeepsConditionalReferencesAndToolchainPolicyPerVariant()
+    {
+        var debug = Configuration(BuildProfiles.Debug);
+        var release = Configuration(BuildProfiles.Release);
+        var library = Module("library", "Library", ModuleKind.StaticLibrary, ["src/library.cpp"]);
+        var debugApplication = Module("application", "Application", ModuleKind.Executable, ["src/main.cpp"]) with
+        {
+            Dependencies = [new("library", DependencyVisibility.Private)],
+        };
+        var releaseApplication = debugApplication with { Dependencies = [] };
+        var applicationProject = new WorkspaceProject(
+            "application", "Application", ModuleLanguage.Cxx,
+            [new("app", debug, debugApplication), new("app", release, releaseApplication)],
+            ["library"],
+            DependencyVariants: [new("app", debug, "library")]);
+        var libraryProject = Project("library", "Library", [new("app", debug, library), new("app", release, library)]);
+        var settings = new ToolchainBuildSettings("Msvc", "vCustom", ["/WX"], ["/OPT:REF"]);
+        var model = new WorkspaceModel("Conditional", "app", [applicationProject, libraryProject], [],
+        [
+            new(debug, "app", [], [], settings),
+            new(release, "app", [], [], settings),
+        ]);
+
+        var result = Generator().Generate(model, Context("conditional"));
+        var project = Parse(result, "Application.vcxproj");
+        var reference = Assert.Single(project.Descendants(MsBuild + "ProjectReference"));
+
+        Assert.Equal(Condition(debug), (string?)reference.Attribute("Condition"));
+        Assert.All(project.Descendants(MsBuild + "PlatformToolset"), element => Assert.Equal("vCustom", element.Value));
+        Assert.All(project.Descendants(MsBuild + "ClCompile")
+                .Where(element => element.Element(MsBuild + "LanguageStandard") is not null),
+            element => Assert.Contains("/WX", element.Element(MsBuild + "AdditionalOptions")?.Value,
+                StringComparison.Ordinal));
+        Assert.All(project.Descendants(MsBuild + "Link"),
+            element => Assert.Contains("/OPT:REF", element.Element(MsBuild + "AdditionalOptions")?.Value,
+                StringComparison.Ordinal));
+        Assert.DoesNotContain("ProjectSection(ProjectDependencies)", File(result, "Conditional.sln"),
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -144,10 +239,10 @@ public sealed class GeneratorBoundaryTests
         var first = Module("FallbackName", "!!!", ModuleKind.StaticLibrary, ["first.cpp"]);
         var second = Module("suffix", "CleanModule", ModuleKind.StaticLibrary, ["second.cpp"]);
         var result = Generator().Generate(new("Names", "target",
-            [
-                Project("FallbackName", "!!!", [new("target", configuration, first)]),
-                Project("suffix", "CleanModule", [new("target", configuration, second)]),
-            ], [], []), Context("names"));
+        [
+            Project("FallbackName", "!!!", [new("target", configuration, first)]),
+            Project("suffix", "CleanModule", [new("target", configuration, second)]),
+        ], [], []), Context("names"));
 
         Assert.Contains(result.Files, file => file.Path.Value == "FallbackName.vcxproj");
         Assert.Contains(result.Files, file => file.Path.Value == "Clean.vcxproj");
@@ -164,7 +259,8 @@ public sealed class GeneratorBoundaryTests
 
         var valid = Module("valid", "Valid", ModuleKind.StaticLibrary, ["valid.cpp"]);
         Assert.Throws<KeyNotFoundException>(() => Generator().Generate(
-            new("Missing", "target", [Project("valid", "Valid", [new("target", configuration, valid)], ["missing"])], [], []),
+            new("Missing", "target", [Project("valid", "Valid", [new("target", configuration, valid)], ["missing"])],
+                [], []),
             Context("missing")));
     }
 
@@ -178,14 +274,20 @@ public sealed class GeneratorBoundaryTests
         var configuration = Configuration(BuildProfiles.Development);
         var later = Compile("z", "src/Z.CPP", "z.obj");
         var earlier = Compile("a", "src/a.cpp", "a.obj");
-        var model = new WorkspaceModel("Commands", "target", [], [], [new(configuration, "target", [later, earlier], [])]);
+        var cSource = Compile("c", "src/b.c", "b.obj");
+        var model = new WorkspaceModel("Commands", "target", [], [],
+            [new(configuration, "target", [later, cSource, earlier], [])]);
         var result = generator.Generate(model, Context("commands"));
         using var json = JsonDocument.Parse(Assert.Single(result.Files).Content);
 
         Assert.Equal("src/a.cpp", json.RootElement[0].GetProperty("file").GetString());
         Assert.Equal("a.obj", json.RootElement[0].GetProperty("output").GetString());
         Assert.Equal("cl.exe", json.RootElement[0].GetProperty("arguments")[0].GetString());
-        Assert.Equal("src/Z.CPP", json.RootElement[1].GetProperty("file").GetString());
+        Assert.Equal("src/b.c", json.RootElement[1].GetProperty("file").GetString());
+        Assert.Equal("src/Z.CPP", json.RootElement[2].GetProperty("file").GetString());
+        var directory = json.RootElement[0].GetProperty("directory").GetString();
+        Assert.NotNull(directory);
+        Assert.True(Path.IsPathFullyQualified(directory));
     }
 
     [Fact]
@@ -230,10 +332,12 @@ public sealed class GeneratorBoundaryTests
     }
 
     private static VisualStudio2022Generator Generator() => new();
-    private static GenerationContext Context(string workspace) => new("C:/checkout", new($".roxy/generated/vs2022/{workspace}"));
+
+    private static GenerationContext Context(string workspace) =>
+        new("C:/checkout", new($".roxy/generated/vs2022/{workspace}"));
 
     private static ConfigurationKey Configuration(FragmentValue profile) => new([
-        RoxyBuildTool.Configuration.Platforms.Windows,
+        Platforms.Windows,
         Architectures.X64,
         profile,
         RoxyBuildTool.Configuration.Toolchains.Msvc,
@@ -268,9 +372,14 @@ public sealed class GeneratorBoundaryTests
         id, name, ModuleLanguage.Cxx, variants, dependencies.IsDefault ? [] : dependencies);
 
     private static string ConfigurationType(GenerationResult result, string path) =>
-        Assert.Single(Parse(result, path).Descendants(MsBuild + "ConfigurationType").Select(element => element.Value).Distinct());
+        Assert.Single(Parse(result, path).Descendants(MsBuild + "ConfigurationType").Select(element => element.Value)
+            .Distinct());
+
+    private static string Condition(ConfigurationKey configuration) =>
+        $"'$(Configuration)|$(Platform)'=='{BuildConfigurationNames.DisplayName(configuration)}|x64'";
 
     private static XDocument Parse(GenerationResult result, string path) => XDocument.Parse(File(result, path));
+
     private static string File(GenerationResult result, string path) =>
         result.Files.Single(file => file.Path.Value == path).Content;
 

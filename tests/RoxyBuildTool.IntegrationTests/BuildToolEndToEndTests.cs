@@ -24,14 +24,16 @@ public sealed class BuildToolEndToEndTests
         var nativeProject = workspace.File(".roxy/generated/vs2022/integration/IntegrationNative.Integration.vcxproj");
         var managedProject = workspace.File(".roxy/generated/vs2022/integration/IntegrationManaged.Integration.csproj");
         var commands = workspace.File(".roxy/generated/CompileDb/integration/compile_commands.json");
-        Assert.Contains("Development Editor|Win64", solution, StringComparison.Ordinal);
+        Assert.Contains("Development Editor-", solution, StringComparison.Ordinal);
         Assert.Contains("keep.cpp", nativeProject, StringComparison.Ordinal);
+        Assert.Contains("nested.cpp", nativeProject, StringComparison.Ordinal);
         Assert.DoesNotContain("excluded.cpp", nativeProject, StringComparison.Ordinal);
         Assert.Contains("NATIVE_EDITOR=1", nativeProject, StringComparison.Ordinal);
         Assert.Contains("Example.Package", managedProject, StringComparison.Ordinal);
         Assert.Contains("keep.cpp", commands, StringComparison.Ordinal);
 
-        var manifestPath = Assert.Single(Directory.GetFiles(System.IO.Path.Combine(workspace.Path, ".roxy", "manifests"), "*.json"));
+        var manifestPath =
+            Assert.Single(Directory.GetFiles(Path.Combine(workspace.Path, ".roxy", "manifests"), "*.json"));
         using (var manifest = JsonDocument.Parse(File.ReadAllText(manifestPath)))
         {
             Assert.Equal(1, manifest.RootElement.GetProperty("schemaVersion").GetInt32());
@@ -41,6 +43,7 @@ public sealed class BuildToolEndToEndTests
             Assert.True(manifest.RootElement.GetProperty("actions").GetArrayLength() > 0);
             Assert.Equal(3, manifest.RootElement.GetProperty("plugins").GetArrayLength());
         }
+
         var manifestContent = File.ReadAllText(manifestPath);
         var manifestTimestamp = File.GetLastWriteTimeUtc(manifestPath);
 
@@ -51,6 +54,59 @@ public sealed class BuildToolEndToEndTests
         Assert.Contains("unchanged .roxy", secondOutput.ToString(), StringComparison.Ordinal);
         Assert.Equal(manifestContent, File.ReadAllText(manifestPath));
         Assert.Equal(manifestTimestamp, File.GetLastWriteTimeUtc(manifestPath));
+    }
+
+    [Fact]
+    public async Task GenerateRemovesOnlyPreviouslyOwnedStaleFiles()
+    {
+        using var workspace = TestWorkspace.Create();
+        Assert.Equal(0, await App([], workspace.Path, new StringWriter())
+            .RunAsync(TestContext.Current.CancellationToken));
+        var outputRoot = Path.Combine(workspace.Path, ".roxy", "generated", "Vs2022", "integration");
+        var ownershipPath = Path.Combine(outputRoot, ".roxy-outputs.json");
+        var stalePath = Path.Combine(outputRoot, "OldGenerated.vcxproj");
+        var userPath = Path.Combine(outputRoot, "UserNotes.txt");
+        File.WriteAllText(stalePath, "stale");
+        File.WriteAllText(userPath, "keep");
+        var tracked = JsonSerializer.Deserialize<List<string>>(File.ReadAllText(ownershipPath))!;
+        tracked.Add("OldGenerated.vcxproj");
+        File.WriteAllText(ownershipPath, JsonSerializer.Serialize(tracked));
+        using var output = new StringWriter();
+
+        var exitCode = await App([], workspace.Path, output).RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, exitCode);
+        Assert.False(File.Exists(stalePath));
+        Assert.True(File.Exists(userPath));
+        Assert.Contains("remove", output.ToString(), StringComparison.Ordinal);
+
+        File.WriteAllText(ownershipPath, "not json");
+        Assert.Equal(0, await App([], workspace.Path, new StringWriter())
+            .RunAsync(TestContext.Current.CancellationToken));
+        Assert.True(File.Exists(userPath));
+    }
+
+    [Fact]
+    public async Task FullMatrixGenerationIsDeterministicWithParallelConfigurationResolution()
+    {
+        using var workspace = TestWorkspace.Create();
+
+        var first = await Run([
+            "generate", "IntegrationWorkspace", "--workspace", "CompileDb"
+        ], workspace.Path);
+        var firstContent = workspace.File(
+            ".roxy/generated/CompileDb/integration/compile_commands.json");
+        var second = await Run([
+            "generate", "IntegrationWorkspace", "--workspace", "CompileDb"
+        ], workspace.Path);
+
+        Assert.Equal(0, first.ExitCode);
+        Assert.Equal(0, second.ExitCode);
+        Assert.Contains("unchanged", second.Output, StringComparison.Ordinal);
+        Assert.Equal(firstContent, workspace.File(
+            ".roxy/generated/CompileDb/integration/compile_commands.json"));
+        using var commands = JsonDocument.Parse(firstContent);
+        Assert.True(commands.RootElement.GetArrayLength() > 5);
     }
 
     [Fact]
@@ -102,7 +158,7 @@ public sealed class BuildToolEndToEndTests
     {
         using var workspace = TestWorkspace.Create();
         using var output = new StringWriter();
-        var fakeMsBuild = System.IO.Path.ChangeExtension(typeof(FakeMsBuildMarker).Assembly.Location, ".exe");
+        var fakeMsBuild = Path.ChangeExtension(typeof(FakeMsBuildMarker).Assembly.Location, ".exe");
         Assert.True(File.Exists(fakeMsBuild));
 
         var exitCode = await App([
@@ -113,14 +169,28 @@ public sealed class BuildToolEndToEndTests
             .RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(0, exitCode);
-        var arguments = File.ReadAllLines(System.IO.Path.Combine(workspace.Path, ".roxy", "fake-msbuild.args"));
+        var arguments = File.ReadAllLines(Path.Combine(workspace.Path, ".roxy", "fake-msbuild.args"));
         Assert.EndsWith("IntegrationWorkspace.IntegrationTarget.Build.sln", arguments[0], StringComparison.Ordinal);
         Assert.Contains("/m", arguments);
         Assert.Contains("/restore", arguments);
         Assert.Contains("/t:Build", arguments);
-        Assert.Contains("/p:Configuration=Development Client", arguments);
+        Assert.Contains(arguments, argument =>
+            argument.StartsWith("/p:Configuration=Development Client-", StringComparison.Ordinal));
         Assert.Contains("/p:Platform=Win64", arguments);
         Assert.Contains("/verbosity:minimal", arguments);
+
+        var editorExitCode = await App([
+                "build", "IntegrationTarget", "--profile", "development",
+                "--fragment", "Integration.Flavor=editor"
+            ], workspace.Path, new StringWriter())
+            .WithMsBuild(fakeMsBuild)
+            .RunAsync(TestContext.Current.CancellationToken);
+        var editorArguments = File.ReadAllLines(Path.Combine(workspace.Path, ".roxy", "fake-msbuild.args"));
+
+        Assert.Equal(0, editorExitCode);
+        Assert.NotEqual(arguments[0], editorArguments[0]);
+        Assert.Contains(editorArguments, argument =>
+            argument.StartsWith("/p:Configuration=Development Editor-", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -158,7 +228,7 @@ public sealed class BuildToolEndToEndTests
 
         using var missingOutput = new StringWriter();
         using var missingError = new StringWriter();
-        var missingGenerator = await global::RoxyBuildTool.BuildToolApp.Create([
+        var missingGenerator = await BuildToolApp.Create([
                 "generate", "IntegrationWorkspace", "--workspace", "missing",
                 "--profile", "debug", "--fragment", "Integration.Flavor=client",
             ])
@@ -177,7 +247,7 @@ public sealed class BuildToolEndToEndTests
         using var workspace = TestWorkspace.Create();
         using var output = new StringWriter();
 
-        var exitCode = await global::RoxyBuildTool.BuildToolApp.Create(["query", "graph", "CycleTarget"])
+        var exitCode = await BuildToolApp.Create(["query", "graph", "CycleTarget"])
             .WithWorkspaceRoot(workspace.Path)
             .WithOutput(output)
             .AddRules<CycleRulesModule>()
@@ -190,13 +260,14 @@ public sealed class BuildToolEndToEndTests
     [Fact]
     public void DuplicatePluginsAreRejectedBeforeExecution()
     {
-        var app = global::RoxyBuildTool.BuildToolApp.Create([]).UseWindowsPlatform();
+        var app = BuildToolApp.Create([]).UseWindowsPlatform();
         var exception = Assert.Throws<InvalidOperationException>(() => app.UseWindowsPlatform());
         Assert.Contains("already registered", exception.Message, StringComparison.Ordinal);
     }
 
-    private static global::RoxyBuildTool.BuildToolApp App(string[] args, string root, TextWriter output, TextWriter? error = null) =>
-        global::RoxyBuildTool.BuildToolApp.Create(args)
+    private static BuildToolApp App(string[] args, string root, TextWriter output, TextWriter? error = null)
+    {
+        return BuildToolApp.Create(args)
             .WithWorkspaceRoot(root)
             .WithOutput(output, error)
             .AddRules<IntegrationRulesModule>()
@@ -204,11 +275,12 @@ public sealed class BuildToolEndToEndTests
             .UseVisualStudio()
             .UseCompilationDatabase()
             .DefaultGenerate<IntegrationWorkspace>(request => request
-                .Workspace(global::RoxyBuildTool.WorkspaceGenerators.VisualStudio2022,
-                    global::RoxyBuildTool.WorkspaceGenerators.CompilationDatabase,
-                    global::RoxyBuildTool.WorkspaceGenerators.VisualStudio2022)
+                .Workspace(WorkspaceGenerators.VisualStudio2022,
+                    WorkspaceGenerators.CompilationDatabase,
+                    WorkspaceGenerators.VisualStudio2022)
                 .Select(BuildProfiles.Development)
                 .Select(IntegrationFlavor.Editor));
+    }
 
     private static async Task<(int ExitCode, string Output, string Error)> Run(string[] args, string root)
     {
@@ -223,25 +295,28 @@ public sealed class BuildToolEndToEndTests
         private TestWorkspace(string path) => Path = path;
         public string Path { get; }
 
+        public void Dispose()
+        {
+            if (Directory.Exists(Path)) Directory.Delete(Path, true);
+        }
+
         public static TestWorkspace Create()
         {
             var path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"RoxyIntegration-{Guid.NewGuid():N}");
             Directory.CreateDirectory(path);
             Directory.CreateDirectory(System.IO.Path.Combine(path, "include"));
             Directory.CreateDirectory(System.IO.Path.Combine(path, "external"));
+            Directory.CreateDirectory(System.IO.Path.Combine(path, "nested"));
             System.IO.File.WriteAllText(System.IO.Path.Combine(path, "keep.cpp"), "int keep() { return 1; }");
+            System.IO.File.WriteAllText(System.IO.Path.Combine(path, "nested", "nested.cpp"),
+                "int nested() { return 2; }");
             System.IO.File.WriteAllText(System.IO.Path.Combine(path, "excluded.cpp"), "int excluded() { return 0; }");
             return new(path);
         }
 
-        public string File(string relativePath) => System.IO.File.ReadAllText(System.IO.Path.Combine(Path, relativePath));
-
-        public void Dispose()
+        public string File(string relativePath)
         {
-            if (Directory.Exists(Path))
-            {
-                Directory.Delete(Path, recursive: true);
-            }
+            return System.IO.File.ReadAllText(System.IO.Path.Combine(Path, relativePath));
         }
     }
 }

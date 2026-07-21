@@ -15,7 +15,7 @@ Generated IDE and compilation-database files are projections of the rules model.
     Vs2022/<workspace>/
     CompileDb/<workspace>/
   manifests/<request-hash>.json
-out/<platform>/<architecture>/<profile>/<target>/
+out/<platform>/<architecture>/<profile>/<configuration-hash>/<target>/
 intermediate/<configuration-hash>/<target>/
 ```
 
@@ -31,7 +31,7 @@ The Visual Studio generator writes:
 - A generated `Directory.Build.props` that isolates intermediate output.
 - The build-host project when `WorkspaceRules.IncludeBuildHost` is enabled.
 
-Human-readable solution configuration names are derived from the profile and custom fragments. Internal configuration identity remains the full canonical key.
+Human-readable solution configuration names are derived from the profile and custom fragments and include a short canonical hash so configurations that differ only by toolchain or link model cannot collide. Internal configuration identity remains the full canonical key.
 
 The `build` command uses a separate target-scoped solution under `.roxy/generated/Vs2022`. It does not replace the complete workspace solution an IDE may already have open.
 
@@ -54,5 +54,7 @@ The request hash includes the workspace, selected generators, configurations, an
 ## Compare-before-write
 
 RoxyBuildTool normalizes generated text to LF and compares it with the existing file. An unchanged file is not replaced, preserving timestamps and reducing unnecessary IDE reloads.
+
+Each generator output directory contains `.roxy-outputs.json`. On the next successful generation, files that were previously tracked but are no longer emitted are removed. Files not listed in that ownership record are never removed.
 
 Action and project ordering uses ordinal stable IDs. Configuration keys sort fragments and reject duplicate fragment assignments. These rules keep generated output stable across repeated runs with equivalent inputs.

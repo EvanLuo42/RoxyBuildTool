@@ -13,6 +13,7 @@ public static class DependencyResolver
     {
         var states = new Dictionary<string, VisitState>(StringComparer.Ordinal);
         var configured = new Dictionary<string, ConfiguredModule>(StringComparer.Ordinal);
+        var moduleDefinitions = definitions.Modules.ToDictionary(module => module.Id, StringComparer.Ordinal);
         var stack = new List<string>();
         var diagnostics = ImmutableArray.CreateBuilder<Diagnostic>();
 
@@ -50,18 +51,14 @@ public static class DependencyResolver
                 return null;
             }
 
-            ModuleDefinition definition;
-            try
-            {
-                definition = definitions.GetModule(moduleId);
-                definition = definition.ConfigureForConfiguration?.Invoke(configuration) ?? definition;
-            }
-            catch (InvalidOperationException)
+            if (!moduleDefinitions.TryGetValue(moduleId, out var definition))
             {
                 diagnostics.Add(new Diagnostic("RBT2002", DiagnosticSeverity.Error,
                     $"Module '{moduleId}' is not registered.", moduleId, configuration.Canonical));
                 return null;
             }
+
+            definition = definition.ConfigureForConfiguration?.Invoke(configuration) ?? definition;
 
             var conditionalRules = definition.ConditionalRules.Where(rule => configuration.Is(rule.Match))
                 .ToImmutableArray();
@@ -147,11 +144,7 @@ public static class DependencyResolver
         TargetDefinition target,
         ConfigurationKey configuration)
     {
-        var platform = GetValue(configuration, "Platform");
-        var architecture = GetValue(configuration, "Architecture");
-        var profile = GetValue(configuration, "Profile");
-        var outputRoot =
-            $"out/{platform.ToLowerInvariant()}/{architecture.ToLowerInvariant()}/{profile.ToLowerInvariant()}/{target.Id}";
+        var outputRoot = BuildPathLayout.OutputRoot(configuration, target.Id);
         return module.Kind switch
         {
             ModuleKind.StaticLibrary => new UsageRequirements([], [],
@@ -160,12 +153,22 @@ public static class DependencyResolver
             ModuleKind.SharedLibrary => new UsageRequirements([], [],
                 [new UsageValue($"{outputRoot}/{module.Id}.lib", $"{module.Id}:artifact")],
                 [new UsageValue($"{outputRoot}/{module.Id}.dll", $"{module.Id}:runtime")]),
+            ModuleKind.ObjectLibrary => new UsageRequirements([], [],
+            [
+                .. module.Sources
+                    .Where(source => BuildFileKinds.IsCxxSource(source.Value))
+                    .Select(source => new UsageValue(
+                        BuildPathLayout.ObjectFile(configuration, target.Id, module.Id, source),
+                        $"{module.Id}:object"))
+                    .Concat(module.Sources
+                        .Where(source => BuildFileKinds.IsResource(source.Value))
+                        .Select(source => new UsageValue(
+                            BuildPathLayout.ResourceFile(configuration, target.Id, module.Id, source),
+                            $"{module.Id}:resource")))
+            ], []),
             _ => UsageRequirements.Empty,
         };
     }
-
-    private static string GetValue(ConfigurationKey configuration, string fragment) =>
-        configuration.Values.Single(value => value.Fragment.Value == fragment).Value;
 
     private enum VisitState
     {

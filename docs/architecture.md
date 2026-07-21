@@ -185,6 +185,7 @@ The resolver performs a depth-first traversal from target root modules. It diagn
 - Required modules disabled by a matching conditional rule.
 
 Configuration-dependent module definitions are materialized before dependency propagation.
+Target configurations are resolved in parallel. Each module/configuration receives a fresh rules instance, while immutable results and source-directory snapshots are cached by canonical identity.
 
 ## Immutable intermediate representations
 
@@ -204,7 +205,7 @@ This is the last layer that knows authoring-level dependency visibility.
 
 `ActionGraphLowerer` converts configured modules into explicit actions and artifacts. The current action kinds are:
 
-- C++ compile, archive, and link.
+- C++ and Windows resource compile, archive, and link.
 - Runtime file copy.
 - .NET restore and build.
 
@@ -219,7 +220,7 @@ Commands remain structured until execution or generator output. Shell quoting is
 - Stable project identity and presentation name.
 - Language.
 - Target/configuration variants.
-- Project dependencies.
+- Project dependencies with the exact target/configuration variants in which each edge exists.
 - Optional imported build-host project.
 
 The model includes the configured and action graphs consumed by workspace generators. Generators therefore do not need to re-resolve rules.
@@ -231,7 +232,7 @@ A platform plugin registers `PlatformDescriptor` and `ToolchainDescriptor` servi
 - Platform `Windows`.
 - Architecture `X64`.
 - Toolchain `Msvc14.4`.
-- `cl.exe`, `lib.exe`, and `link.exe` commands.
+- `cl.exe`, `rc.exe`, `lib.exe`, and `link.exe` commands.
 - Visual Studio platform toolset `v143`.
 - Compile and link policies for the four built-in profiles.
 
@@ -250,7 +251,7 @@ The Visual Studio generator consumes `WorkspaceModel` and produces:
 - SDK-style C# project files.
 - A generated `Directory.Build.props` for isolated intermediate paths.
 
-The solution maps canonical configurations to readable display names and `Win64`. Project files carry compiler settings, references, sources, package references, and dependencies derived from the immutable model.
+The solution maps canonical configurations to unique readable display names and `Win64`. Project files carry compiler settings, references, sources, package references, target frameworks, and dependencies derived from the exact immutable variant. A project that has no matching variant is mapped for IDE display but is not built in that solution configuration.
 
 The full workspace and target-scoped build solutions use different output directories. A command-line build cannot overwrite the solution open in an IDE.
 
@@ -281,7 +282,7 @@ Default output layout:
 .roxy/
   generated/<generator>/<workspace>/
   manifests/<request-hash>.json
-out/<platform>/<architecture>/<profile>/<target>/
+out/<platform>/<architecture>/<profile>/<configuration-hash>/<target>/
 intermediate/<configuration-hash>/<target>/
 ```
 
@@ -292,8 +293,10 @@ Determinism rules:
 - Logical paths are workspace-relative and normalized to `/`.
 - Generated text is normalized to LF.
 - Files are written only when content changes.
+- Each generator tracks only its own output paths and removes stale tracked files without deleting unowned files.
 - Each action output must have one producer.
 - Action dependencies must reference existing action IDs.
+- Action IDs, artifact IDs, artifact producers, and dependency cycles are validated before generation writes files.
 
 Action semantic hashes include identity, kind, command, arguments, working directory, inputs, outputs, and dependencies. They intentionally exclude presentation-only workspace settings.
 
@@ -309,6 +312,7 @@ Diagnostics have a stable code, severity, message, and optional definition, conf
 | `RBT1000-RBT1999` | Fragments and matrices |
 | `RBT2000-RBT2999` | Definitions and dependency resolution |
 | `RBT3000-RBT3999` | Actions and artifacts |
+| `RBT4000-RBT4999` | Generators and generated output |
 
 User-correctable configuration failures return exit code 2. Unexpected infrastructure failures return exit code 1. Generation should fail before invoking an external build tool whenever sufficient information is available.
 

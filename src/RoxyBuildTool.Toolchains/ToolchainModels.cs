@@ -23,7 +23,8 @@ public sealed record ToolchainDescriptor(
     string Linker,
     string VisualStudioPlatformToolset,
     ImmutableDictionary<string, CxxProfilePolicy> Profiles,
-    CapabilitySet Capabilities)
+    CapabilitySet Capabilities,
+    string? ResourceCompiler = null)
 {
     /// <summary>Gets the policy selected by the configuration's profile fragment.</summary>
     public CxxProfilePolicy GetPolicy(ConfigurationKey configuration)

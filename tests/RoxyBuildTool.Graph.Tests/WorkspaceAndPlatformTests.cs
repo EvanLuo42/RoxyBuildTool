@@ -1,6 +1,5 @@
 using System.Collections.Immutable;
 using RoxyBuildTool.Abstractions;
-using RoxyBuildTool.Graph;
 using RoxyBuildTool.Model;
 using RoxyBuildTool.Platforms.Windows;
 using RoxyBuildTool.Toolchains;
@@ -16,9 +15,12 @@ public sealed class WorkspaceAndPlatformTests
         var debug = DependencyResolverBoundaryTests.Configuration("debug");
         var development = DependencyResolverBoundaryTests.Configuration();
         var dependency = Configured("core", "CoreModule", ModuleKind.StaticLibrary);
-        var gameDebug = Configured("game", "GameExecutableModule", ModuleKind.Executable,
-            dependencies: [new("core", DependencyVisibility.Public)]);
-        var gameDevelopment = gameDebug with { Sources = [new("development.cpp")] };
+        var gameDebug = Configured("game", "GameExecutableModule", ModuleKind.Executable);
+        var gameDevelopment = gameDebug with
+        {
+            Sources = [new("development.cpp")],
+            Dependencies = [new("core", DependencyVisibility.Public)],
+        };
         var configuredGraphs = new[]
         {
             new ConfiguredGraph(development, new("game", "GameTarget", ["game"]), [gameDevelopment, dependency], []),
@@ -29,7 +31,8 @@ public sealed class WorkspaceAndPlatformTests
             new ActionGraph(development, "game", [], []),
             new ActionGraph(debug, "game", [], []),
         };
-        var definition = new WorkspaceDefinition("workspace", "Workspace", ["game"], "game", true, new("Build/Rules.csproj"));
+        var definition =
+            new WorkspaceDefinition("workspace", "Workspace", ["game"], "game", true, new("Build/Rules.csproj"));
 
         var workspace = WorkspaceAssembler.Assemble(definition, configuredGraphs, actionGraphs);
 
@@ -40,11 +43,15 @@ public sealed class WorkspaceAndPlatformTests
         Assert.Equal("Game", game.Name);
         Assert.Equal(2, game.Variants.Length);
         Assert.Equal(["Game.Core"], game.ProjectDependencies);
+        var dependencyVariant = Assert.Single(game.DependencyVariants);
+        Assert.Equal(development, dependencyVariant.Configuration);
+        Assert.Equal("Game.Core", dependencyVariant.ProjectId);
         var core = workspace.Projects.Single(project => project.Id == "Game.Core");
         Assert.Equal("Core.Game", core.Name);
         var host = workspace.Projects.Single(project => project.IsBuildHost);
         Assert.Equal(new LogicalPath("Build/Rules.csproj"), host.ImportedProject);
-        Assert.Equal(["Debug", "Development"], workspace.ConfiguredGraphs.Select(graph => Profile(graph.Configuration)));
+        Assert.Equal(["Debug", "Development"],
+            workspace.ConfiguredGraphs.Select(graph => Profile(graph.Configuration)));
         Assert.Equal(["Debug", "Development"], workspace.ActionGraphs.Select(graph => Profile(graph.Configuration)));
     }
 
@@ -73,15 +80,20 @@ public sealed class WorkspaceAndPlatformTests
         Assert.Equal(new PluginId("Roxy.Windows"), plugin.Id);
         Assert.Equal(new Version(0, 1, 0), plugin.Version);
         Assert.True(plugin.Capabilities.Contains("Platform.Windows"));
-        var platform = Assert.IsType<PlatformDescriptor>(registry.Services.Single(service => service is PlatformDescriptor));
+        var platform =
+            Assert.IsType<PlatformDescriptor>(registry.Services.Single(service => service is PlatformDescriptor));
         Assert.Equal(new PlatformId("windows"), platform.Id);
         Assert.Equal(["X64"], platform.Architectures);
-        var toolchain = Assert.IsType<ToolchainDescriptor>(registry.Services.Single(service => service is ToolchainDescriptor));
+        var toolchain =
+            Assert.IsType<ToolchainDescriptor>(registry.Services.Single(service => service is ToolchainDescriptor));
         Assert.Equal("cl.exe", toolchain.Compiler);
         Assert.Equal("lib.exe", toolchain.Librarian);
         Assert.Equal("link.exe", toolchain.Linker);
+        Assert.Equal("rc.exe", toolchain.ResourceCompiler);
+        Assert.True(toolchain.Capabilities.Contains("WindowsResource"));
         Assert.Equal("v143", toolchain.VisualStudioPlatformToolset);
-        Assert.Equal(["Debug", "Development", "Release", "Shipping"], toolchain.Profiles.Keys.Order(StringComparer.Ordinal));
+        Assert.Equal(["Debug", "Development", "Release", "Shipping"],
+            toolchain.Profiles.Keys.Order(StringComparer.Ordinal));
         Assert.False(toolchain.Profiles["Debug"].Optimize);
         Assert.True(toolchain.Profiles["Shipping"].MinimalDiagnostics);
     }

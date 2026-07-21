@@ -1,7 +1,5 @@
 using System.Collections.Immutable;
-using RoxyBuildTool.Abstractions;
 using RoxyBuildTool.Configuration;
-using RoxyBuildTool.Graph;
 using RoxyBuildTool.Model;
 using Xunit;
 
@@ -78,11 +76,13 @@ public sealed class DependencyResolverBoundaryTests
         var dependency = Module("dependency", publicUsage: Usage(include: "dependency/include"));
         var root = Module("root", dependencies: [new("dependency", DependencyVisibility.Private)]) with
         {
-            ConfigureForConfiguration = _ => Module("root", dependencies: [new("dependency", DependencyVisibility.Private)]) with
-            {
-                DisplayName = "Configured Root",
-                ConditionalRules = [new(BuildProfiles.Development, false, ["CONDITIONAL=1"], ["dependency"])],
-            },
+            ConfigureForConfiguration = _ =>
+                Module("root", dependencies: [new DependencyEdge("dependency", DependencyVisibility.Private)]) with
+                {
+                    DisplayName = "Configured Root",
+                    ConditionalRules =
+                    [new ConditionalModuleRule(BuildProfiles.Development, false, ["CONDITIONAL=1"], ["dependency"])]
+                }
         };
         var definitions = new DefinitionGraph([root, dependency], [Target("target", ["root"])], []);
 
@@ -91,8 +91,24 @@ public sealed class DependencyResolverBoundaryTests
 
         Assert.Equal("Configured Root", configured.DisplayName);
         Assert.Empty(configured.Dependencies);
-        Assert.Contains(configured.PrivateUsage.Defines, item => item.Value == "CONDITIONAL=1" && item.Origin == "root:conditional");
+        Assert.Contains(configured.PrivateUsage.Defines,
+            item => item.Value == "CONDITIONAL=1" && item.Origin == "root:conditional");
         Assert.DoesNotContain(configured.CompileUsage.IncludeDirectories, item => item.Value == "dependency/include");
+    }
+
+    [Fact]
+    public void ConfigurationCallbackFailuresAreNotMisreportedAsMissingModules()
+    {
+        var root = Module("root") with
+        {
+            ConfigureForConfiguration = _ => throw new InvalidOperationException("configuration callback failed")
+        };
+        var definitions = new DefinitionGraph([root], [Target("target", ["root"])], []);
+
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            DependencyResolver.Resolve(definitions, definitions.Targets[0], Configuration()));
+
+        Assert.Equal("configuration callback failed", exception.Message);
     }
 
     [Fact]
@@ -110,25 +126,47 @@ public sealed class DependencyResolverBoundaryTests
 
         var graph = DependencyResolver.Resolve(definitions, definitions.Targets[0], Configuration());
         var consumer = graph.GetModule("consumer");
+        var outputRoot = BuildPathLayout.OutputRoot(graph.Configuration, graph.Target.Id);
 
         Assert.Equal(
-            ["out/windows/x64/development/app/shared.lib", "out/windows/x64/development/app/static.lib"],
+            [$"{outputRoot}/shared.lib", $"{outputRoot}/static.lib"],
             consumer.CompileUsage.LinkInputs.Select(item => item.Value));
-        Assert.Equal("out/windows/x64/development/app/shared.dll",
+        Assert.Equal($"{outputRoot}/shared.dll",
             Assert.Single(graph.GetModule("shared").ConsumerUsage.RuntimeFiles).Value);
+    }
+
+    [Fact]
+    public void ObjectLibrariesPublishTheirStableObjectFilesInsteadOfASyntheticLibrary()
+    {
+        var definitions = new DefinitionGraph([
+            Module("objects", ModuleKind.ObjectLibrary, sources: ["src/a.cpp", "src/z.cpp", "resources/app.rc"]),
+            Module("consumer", ModuleKind.Executable,
+                dependencies: [new DependencyEdge("objects", DependencyVisibility.Private)])
+        ], [Target("app", ["consumer"])], []);
+
+        var graph = DependencyResolver.Resolve(definitions, definitions.Targets[0], Configuration());
+        var linkInputs = graph.GetModule("consumer").CompileUsage.LinkInputs.Select(item => item.Value).ToArray();
+
+        Assert.Equal(3, linkInputs.Length);
+        Assert.Equal(2, linkInputs.Count(input => input.EndsWith(".obj", StringComparison.Ordinal)));
+        Assert.Single(linkInputs, input => input.EndsWith(".res", StringComparison.Ordinal));
+        Assert.DoesNotContain(linkInputs, input => input.EndsWith("objects.lib", StringComparison.Ordinal));
     }
 
     [Fact]
     public void RuntimeEdgesPropagateOnlyRuntimeFiles()
     {
         var runtimeUsage = new UsageRequirements(
-            [new("include", "runtime")], [new("DEFINE", "runtime")], [new("runtime.lib", "runtime")], [new("runtime.dll", "runtime")]);
+            [new UsageValue("include", "runtime")], [new UsageValue("DEFINE", "runtime")],
+            [new UsageValue("runtime.lib", "runtime")],
+            [new UsageValue("runtime.dll", "runtime")]);
         var definitions = new DefinitionGraph([
             Module("runtime", publicUsage: runtimeUsage),
             Module("consumer", dependencies: [new("runtime", DependencyVisibility.Runtime)]),
         ], [Target("target", ["consumer"])], []);
 
-        var consumer = DependencyResolver.Resolve(definitions, definitions.Targets[0], Configuration()).GetModule("consumer");
+        var consumer = DependencyResolver.Resolve(definitions, definitions.Targets[0], Configuration())
+            .GetModule("consumer");
 
         Assert.Empty(consumer.CompileUsage.IncludeDirectories);
         Assert.Empty(consumer.CompileUsage.Defines);

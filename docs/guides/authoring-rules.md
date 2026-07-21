@@ -39,6 +39,8 @@ public sealed class EngineCoreModule : CxxModule
 
 Methods may be static or instance methods and may be non-public. Configuration methods on an abstract base target are inherited. `Priority` controls ordering; lower values run first. Unconditional methods run before filtered methods at the same priority.
 
+Configuration graphs may be resolved concurrently. Configure methods should mutate only the supplied rules object and must not rely on shared mutable static state.
+
 Filtered `[Configure]` methods are supported on modules:
 
 ```csharp
@@ -61,12 +63,14 @@ Derive from `CxxModule` and select a `CxxOutput`:
 | `SharedLibrary` | DLL and import library on Windows. |
 | `Executable` | Native executable. |
 
-Source roots are relative to the workspace root. `Sources.From` enumerates matching files recursively; `Sources.Exclude` removes matching paths.
+Source roots are relative to the workspace root. `Sources.From` enumerates a root once per rules snapshot and applies segment-aware `*`, `?`, and recursive `**` matching; `Sources.Exclude` removes matching paths.
 
 ```csharp
 rules.Sources.From("Engine/Runtime", "**/*.cpp");
 rules.Sources.Exclude("**/*Tests.cpp");
 ```
+
+Assembly discovery includes concrete rule types by default. Add `[BuildRuleIgnore]` to helper rule types that should only be registered explicitly through an `IRulesModule`.
 
 Usage requirements distinguish settings needed by the module from settings exported to consumers:
 
