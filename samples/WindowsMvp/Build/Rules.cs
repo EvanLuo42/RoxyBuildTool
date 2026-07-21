@@ -5,7 +5,7 @@ using RoxyBuildTool.Model;
 
 namespace WindowsMvp.Build;
 
-[BuildFragment("game.flavor")]
+[BuildFragment("Game.Flavor")]
 public enum GameFlavor
 {
     Client,

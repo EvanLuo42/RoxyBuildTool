@@ -15,12 +15,12 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator
     private static readonly Guid CxxProjectType = new("8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942");
     private static readonly Guid CSharpProjectType = new("FAE04EC0-301F-11D3-BF4B-00C04F79EFBC");
 
-    public WorkspaceGeneratorId Id { get; } = new("vs2022");
+    public WorkspaceGeneratorId Id { get; } = new("Vs2022");
     public CapabilitySet Capabilities { get; } = new([
-        "mixed-workspace",
-        "native-msbuild",
-        "sdk-style-csharp",
-        "project-reference",
+        "MixedWorkspace",
+        "NativeMsbuild",
+        "SdkStyleCsharp",
+        "ProjectReference",
     ]);
 
     public GenerationResult Generate(WorkspaceModel workspace, GenerationContext context)
@@ -82,7 +82,7 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator
         builder.AppendLine("\tGlobalSection(SolutionConfigurationPlatforms) = preSolution");
         foreach (var configuration in configurations)
         {
-            builder.AppendLine(CultureInfo.InvariantCulture, $"\t\t{configuration}|{SolutionPlatformName} = {configuration}|{SolutionPlatformName}");
+            builder.AppendLine(CultureInfo.InvariantCulture, $"\t\t{configuration.Name}|{SolutionPlatformName} = {configuration.Name}|{SolutionPlatformName}");
         }
         builder.AppendLine("\tEndGlobalSection");
         builder.AppendLine("\tGlobalSection(ProjectConfigurationPlatforms) = postSolution");
@@ -91,12 +91,13 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator
             var guid = ProjectGuid(project.Id).ToString().ToUpperInvariant();
             foreach (var configuration in configurations)
             {
-                var supported = project.IsBuildHost || project.Variants.Any(variant => DisplayName(variant) == configuration);
-                var mapped = project.IsBuildHost ? "Debug" : configuration;
-                builder.AppendLine(CultureInfo.InvariantCulture, $"\t\t{{{guid}}}.{configuration}|{SolutionPlatformName}.ActiveCfg = {mapped}|{(project.IsBuildHost ? "Any CPU" : "x64")}");
-                if (supported && !project.IsBuildHost)
+                var mapped = project.IsBuildHost
+                    ? "Debug"
+                    : DisplayName(MapProjectConfiguration(project, configuration.Key));
+                builder.AppendLine(CultureInfo.InvariantCulture, $"\t\t{{{guid}}}.{configuration.Name}|{SolutionPlatformName}.ActiveCfg = {mapped}|{(project.IsBuildHost ? "Any CPU" : "x64")}");
+                if (!project.IsBuildHost)
                 {
-                    builder.AppendLine(CultureInfo.InvariantCulture, $"\t\t{{{guid}}}.{configuration}|{SolutionPlatformName}.Build.0 = {mapped}|x64");
+                    builder.AppendLine(CultureInfo.InvariantCulture, $"\t\t{{{guid}}}.{configuration.Name}|{SolutionPlatformName}.Build.0 = {mapped}|x64");
                 }
             }
         }
@@ -132,12 +133,12 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator
 
         foreach (var variant in project.Variants)
         {
-            var profile = Fragment(variant.Configuration, "profile");
+            var profile = Fragment(variant.Configuration, "Profile");
             root.Add(new XElement(MsBuild + "PropertyGroup",
                 new XAttribute("Condition", Condition(variant)),
                 new XAttribute("Label", "Configuration"),
                 new XElement(MsBuild + "ConfigurationType", ConfigurationType(variant.Module.Kind)),
-                new XElement(MsBuild + "UseDebugLibraries", profile == "debug" ? "true" : "false"),
+                new XElement(MsBuild + "UseDebugLibraries", profile == "Debug" ? "true" : "false"),
                 new XElement(MsBuild + "PlatformToolset", "v143"),
                 new XElement(MsBuild + "CharacterSet", "Unicode")));
         }
@@ -145,8 +146,8 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator
 
         foreach (var variant in project.Variants)
         {
-            var profile = Fragment(variant.Configuration, "profile");
-            var outputRoot = $"$(RoxyWorkspaceRoot)\\out\\windows\\x64\\{profile}\\{variant.Target}\\";
+            var profile = Fragment(variant.Configuration, "Profile");
+            var outputRoot = $"$(RoxyWorkspaceRoot)\\out\\windows\\x64\\{profile.ToLowerInvariant()}\\{variant.Target}\\";
             var intermediate = $"$(RoxyWorkspaceRoot)\\intermediate\\{variant.Configuration.ShortHash}\\{variant.Target}.{variant.Module.Id}\\";
             root.Add(new XElement(MsBuild + "PropertyGroup",
                 new XAttribute("Condition", Condition(variant)),
@@ -156,9 +157,9 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator
 
             var compile = new XElement(MsBuild + "ClCompile",
                 new XElement(MsBuild + "LanguageStandard", "stdcpplatest"),
-                new XElement(MsBuild + "Optimization", profile == "debug" ? "Disabled" : "MaxSpeed"),
-                new XElement(MsBuild + "BasicRuntimeChecks", profile == "debug" ? "EnableFastChecks" : "Default"),
-                new XElement(MsBuild + "RuntimeLibrary", profile == "debug" ? "MultiThreadedDebugDLL" : "MultiThreadedDLL"),
+                new XElement(MsBuild + "Optimization", profile == "Debug" ? "Disabled" : "MaxSpeed"),
+                new XElement(MsBuild + "BasicRuntimeChecks", profile == "Debug" ? "EnableFastChecks" : "Default"),
+                new XElement(MsBuild + "RuntimeLibrary", profile == "Debug" ? "MultiThreadedDebugDLL" : "MultiThreadedDLL"),
                 new XElement(MsBuild + "AdditionalIncludeDirectories", JoinMsbuild(
                     variant.Module.CompileUsage.IncludeDirectories.Select(value => $"$(RoxyWorkspaceRoot)\\{ToWindows(value.Value)}"),
                     "AdditionalIncludeDirectories")),
@@ -207,6 +208,7 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator
                 new XElement("Deterministic", "true"),
                 new XElement("ManagePackageVersionsCentrally", "false"),
                 new XElement("RestorePackagesWithLockFile", "true"),
+                new XElement("NuGetLockFilePath", "$(BaseIntermediateOutputPath)packages.lock.json"),
                 new XElement("EnableDefaultItems", "false"),
                 new XElement("AssemblyName", representative.Id),
                 new XElement("RootNamespace", representative.RootNamespace ?? project.Name.Replace(' ', '.')),
@@ -214,11 +216,11 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator
 
         foreach (var variant in project.Variants)
         {
-            var profile = Fragment(variant.Configuration, "profile");
+            var profile = Fragment(variant.Configuration, "Profile");
             root.Add(new XElement("PropertyGroup",
                 new XAttribute("Condition", Condition(variant)),
-                new XElement("Optimize", profile == "debug" ? "false" : "true"),
-                new XElement("OutputPath", $"$(RoxyWorkspaceRoot)\\out\\windows\\x64\\{profile}\\{variant.Target}\\{variant.Module.Id}\\"),
+                new XElement("Optimize", profile == "Debug" ? "false" : "true"),
+                new XElement("OutputPath", $"$(RoxyWorkspaceRoot)\\out\\windows\\x64\\{profile.ToLowerInvariant()}\\{variant.Target}\\{variant.Module.Id}\\"),
                 new XElement("IntermediateOutputPath", $"$(RoxyWorkspaceRoot)\\intermediate\\{variant.Configuration.ShortHash}\\{variant.Target}.{variant.Module.Id}\\")));
             if (!variant.Module.CompileUsage.RuntimeFiles.IsEmpty)
             {
@@ -228,6 +230,7 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator
                         new XElement("Content",
                             new XAttribute("Include", $"$(RoxyWorkspaceRoot)\\{ToWindows(runtime.Value)}"),
                             new XElement("Link", Path.GetFileName(runtime.Value)),
+                            new XElement("Visible", "false"),
                             new XElement("CopyToOutputDirectory", "PreserveNewest")))));
             }
         }
@@ -275,7 +278,6 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator
         XNamespace xmlNamespace)
     {
         var dependencies = project.ProjectDependencies
-            .Where(dependency => projectsById[dependency].Language == project.Language)
             .Order(StringComparer.Ordinal)
             .ToImmutableArray();
         if (dependencies.IsEmpty)
@@ -287,9 +289,16 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator
             dependencies.Select(dependency =>
             {
                 var dependencyProject = projectsById[dependency];
-                return new XElement(xmlNamespace + "ProjectReference",
+                var reference = new XElement(xmlNamespace + "ProjectReference",
                     new XAttribute("Include", $"{ProjectFileStem(dependencyProject)}.{ProjectExtension(dependencyProject)}"),
                     new XElement(xmlNamespace + "Project", $"{{{ProjectGuid(dependency).ToString().ToUpperInvariant()}}}"));
+                if (dependencyProject.Language != project.Language)
+                {
+                    reference.Add(
+                        new XElement(xmlNamespace + "ReferenceOutputAssembly", "false"),
+                        new XElement(xmlNamespace + "SkipGetTargetFrameworkProperties", "true"));
+                }
+                return reference;
             }));
     }
 
@@ -309,18 +318,44 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator
         .OrderBy(source => source.Value, StringComparer.Ordinal)
         .ToImmutableArray();
 
-    private static ImmutableArray<string> WorkspaceConfigurations(WorkspaceModel workspace) => workspace.Projects
+    private static ImmutableArray<SolutionConfiguration> WorkspaceConfigurations(WorkspaceModel workspace) => workspace.Projects
         .SelectMany(project => project.Variants)
-        .Select(DisplayName)
-        .Distinct(StringComparer.Ordinal)
-        .Order(StringComparer.Ordinal)
+        .GroupBy(DisplayName, StringComparer.Ordinal)
+        .Select(group => new SolutionConfiguration(
+            group.Key,
+            group.OrderBy(variant => variant.Configuration)
+                .ThenBy(variant => variant.Target, StringComparer.Ordinal)
+                .First().Configuration))
+        .OrderBy(configuration => configuration.Name, StringComparer.Ordinal)
         .ToImmutableArray();
+
+    private static WorkspaceProjectVariant MapProjectConfiguration(
+        WorkspaceProject project,
+        ConfigurationKey solutionConfiguration) => project.Variants
+        .OrderByDescending(variant => SameFragment(variant.Configuration, solutionConfiguration, "Platform"))
+        .ThenByDescending(variant => SameFragment(variant.Configuration, solutionConfiguration, "Architecture"))
+        .ThenByDescending(variant => SameFragment(variant.Configuration, solutionConfiguration, "Profile"))
+        .ThenByDescending(variant => SameFragment(variant.Configuration, solutionConfiguration, "Toolchain"))
+        .ThenByDescending(variant => SameFragment(variant.Configuration, solutionConfiguration, "LinkModel"))
+        .ThenByDescending(variant => SharedFragmentCount(variant.Configuration, solutionConfiguration))
+        .ThenBy(variant => variant.Configuration)
+        .ThenBy(variant => variant.Target, StringComparer.Ordinal)
+        .First();
+
+    private static bool SameFragment(ConfigurationKey left, ConfigurationKey right, string fragment)
+    {
+        var id = new FragmentId(fragment);
+        return left.TryGet(id, out var leftValue) && right.TryGet(id, out var rightValue) && leftValue == rightValue;
+    }
+
+    private static int SharedFragmentCount(ConfigurationKey left, ConfigurationKey right) =>
+        left.Values.Count(value => right.Is(value));
 
     private static string DisplayName(WorkspaceProjectVariant variant)
     {
-        var profile = Fragment(variant.Configuration, "profile");
+        var profile = Fragment(variant.Configuration, "Profile");
         var custom = variant.Configuration.Values
-            .Where(value => value.Fragment.Value is not ("platform" or "architecture" or "profile" or "toolchain" or "link-model"))
+            .Where(value => value.Fragment.Value is not ("Platform" or "Architecture" or "Profile" or "Toolchain" or "LinkModel"))
             .Select(value => value.Value);
         return string.Join(' ', new[] { ToPascalCase(profile) }.Concat(custom.Select(ToPascalCase)));
     }
@@ -365,13 +400,15 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator
     private static string ToWindows(string path) => path.Replace('/', '\\');
     private static string Serialize(XDocument document) => Normalize(document.ToString(SaveOptions.None)) + "\n";
     private static string Normalize(string value) => value.Replace("\r\n", "\n", StringComparison.Ordinal);
+
+    private sealed record SolutionConfiguration(string Name, ConfigurationKey Key);
 }
 
 public sealed class VisualStudioPlugin : IPlugin
 {
-    public PluginId Id { get; } = new("roxy.generator.vs2022");
+    public PluginId Id { get; } = new("Roxy.Generator.Vs2022");
     public Version Version { get; } = new(0, 1, 0);
-    public CapabilitySet Capabilities { get; } = new(["workspace.vs2022", "mixed-workspace"]);
+    public CapabilitySet Capabilities { get; } = new(["Workspace.Vs2022", "MixedWorkspace"]);
     public void Register(IPluginRegistry registry) => registry.AddService<IWorkspaceGenerator>(new VisualStudio2022Generator());
 }
 

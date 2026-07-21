@@ -1,0 +1,19 @@
+# Normalize text files in the repository and check them out with LF endings.
+* text=auto eol=lf
+
+# Windows command scripts require CRLF endings.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Do not attempt line-ending conversion for binary files.
+*.dll binary
+*.exe binary
+*.pdb binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.zip binary
+*.7z binary
+*.pdf binary

@@ -15,8 +15,8 @@ namespace RoxyBuildTool;
 
 public static class WorkspaceGenerators
 {
-    public static WorkspaceGeneratorId VisualStudio2022 { get; } = new("vs2022");
-    public static WorkspaceGeneratorId CompilationDatabase { get; } = new("compile-db");
+    public static WorkspaceGeneratorId VisualStudio2022 { get; } = new("Vs2022");
+    public static WorkspaceGeneratorId CompilationDatabase { get; } = new("CompileDb");
 }
 
 public sealed class GenerateRequestBuilder
@@ -151,7 +151,7 @@ public sealed class BuildToolApp : IBuildToolBuilder, IPluginRegistry
             var defaultRequest = new CommandRequest(
                 CommandKind.Generate,
                 _defaultGenerate.WorkspaceId,
-                _defaultGenerate.Generators.IsEmpty ? ["vs2022"] : _defaultGenerate.Generators,
+                _defaultGenerate.Generators.IsEmpty ? ["Vs2022"] : _defaultGenerate.Generators,
                 _defaultGenerate.Selectors,
                 null,
                 false,
@@ -235,7 +235,7 @@ public sealed class BuildToolApp : IBuildToolBuilder, IPluginRegistry
         {
             Kind = CommandKind.Generate,
             Subject = scopedWorkspace.Id,
-            WorkspaceGenerators = ["vs2022"],
+            WorkspaceGenerators = ["Vs2022"],
         };
         var scopedDefinitions = definitions with
         {
@@ -259,7 +259,7 @@ public sealed class BuildToolApp : IBuildToolBuilder, IPluginRegistry
             _workspaceRoot,
             ".roxy",
             "generated",
-            "vs2022",
+            "Vs2022",
             scopedWorkspace.Id,
             $"{scopedWorkspace.DisplayName}.sln");
         var msbuild = LocateMsBuild();
@@ -324,10 +324,10 @@ public sealed class BuildToolApp : IBuildToolBuilder, IPluginRegistry
         var graph = DependencyResolver.Resolve(definitions, target, configuration);
         var setting = request.Setting ?? "usage";
         _output.WriteLine($"{target.Id} {configuration.Canonical}");
-        if (setting == "compiler.optimization")
+        if (setting == "Compiler.Optimization")
         {
-            var profile = configuration.Values.Single(value => value.Fragment.Value == "profile").Value;
-            _output.WriteLine($"compiler.optimization = {(profile == "debug" ? "off" : "speed")} (profile:{profile})");
+            var profile = configuration.Values.Single(value => value.Fragment.Value == "Profile").Value;
+            _output.WriteLine($"Compiler.Optimization = {(profile == "Debug" ? "off" : "speed")} (Profile:{profile})");
             return 0;
         }
 
@@ -365,7 +365,7 @@ public sealed class BuildToolApp : IBuildToolBuilder, IPluginRegistry
             {
                 var configured = DependencyResolver.Resolve(definitions, target, configuration);
                 configuredGraphs.Add(configured);
-                var toolchainValue = configuration.Values.Single(value => value.Fragment.Value == "toolchain").Value;
+                var toolchainValue = configuration.Values.Single(value => value.Fragment.Value == "Toolchain").Value;
                 var toolchain = Services<ToolchainDescriptor>().SingleOrDefault(service => service.Id.Value == toolchainValue)
                     ?? throw new InvalidOperationException($"Toolchain '{toolchainValue}' is not registered by a platform plugin.");
                 actionGraphs.Add(ActionGraphLowerer.Lower(configured, toolchain, workspace.Id));
@@ -454,9 +454,9 @@ public sealed class BuildToolApp : IBuildToolBuilder, IPluginRegistry
 
     private static string DisplayName(ConfigurationKey configuration)
     {
-        var profile = configuration.Values.Single(value => value.Fragment.Value == "profile").Value;
+        var profile = configuration.Values.Single(value => value.Fragment.Value == "Profile").Value;
         var custom = configuration.Values
-            .Where(value => value.Fragment.Value is not ("platform" or "architecture" or "profile" or "toolchain" or "link-model"))
+            .Where(value => value.Fragment.Value is not ("Platform" or "Architecture" or "Profile" or "Toolchain" or "LinkModel"))
             .Select(value => value.Value);
         return string.Join(' ', new[] { ToPascalCase(profile) }.Concat(custom.Select(ToPascalCase)));
     }

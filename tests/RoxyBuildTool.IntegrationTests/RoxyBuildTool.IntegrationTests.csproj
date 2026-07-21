@@ -5,5 +5,6 @@
     <ProjectReference Include="../../src/RoxyBuildTool.Platforms.Windows/RoxyBuildTool.Platforms.Windows.csproj" />
     <ProjectReference Include="../../src/RoxyBuildTool.Generators.VisualStudio/RoxyBuildTool.Generators.VisualStudio.csproj" />
     <ProjectReference Include="../../src/RoxyBuildTool.Generators.CompilationDatabase/RoxyBuildTool.Generators.CompilationDatabase.csproj" />
+    <ProjectReference Include="../RoxyBuildTool.FakeMsBuild/RoxyBuildTool.FakeMsBuild.csproj" />
   </ItemGroup>
 </Project>

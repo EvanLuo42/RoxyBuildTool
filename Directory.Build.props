@@ -11,10 +11,18 @@
     <Version>0.1.0</Version>
     <Authors>RoxyBuildTool contributors</Authors>
     <RepositoryUrl>https://example.invalid/RoxyBuildTool</RepositoryUrl>
+    <DefaultItemExcludes>$(DefaultItemExcludes);packages.lock.json</DefaultItemExcludes>
   </PropertyGroup>
   <PropertyGroup Condition="'$(MSBuildProjectExtension)' == '.csproj' and $(MSBuildProjectName.EndsWith('Tests'))">
     <OutputType>Exe</OutputType>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
   </PropertyGroup>
+  <ItemGroup Condition="'$(MSBuildProjectExtension)' == '.csproj' and $(MSBuildProjectName.EndsWith('Tests'))">
+    <!-- TODO(RIDER-129745): Remove Microsoft.NET.Test.Sdk here and from Directory.Packages.props
+         once Rider discovers xunit.v3.mtp-v2 projects directly on .NET 10+.
+         https://youtrack.jetbrains.com/issue/RIDER-129745 -->
+    <PackageReference Include="Microsoft.NET.Test.Sdk" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.Testing.Extensions.CodeCoverage" PrivateAssets="all" />
+  </ItemGroup>
 </Project>

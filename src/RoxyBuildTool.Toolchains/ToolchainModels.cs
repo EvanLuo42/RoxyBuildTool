@@ -25,10 +25,10 @@ public sealed record ToolchainDescriptor(
 {
     public CxxProfilePolicy GetPolicy(ConfigurationKey configuration)
     {
-        var profile = configuration.Values.Single(value => value.Fragment.Value == "profile").Value;
-        return Profiles.TryGetValue(profile, out var policy)
-            ? policy
-            : throw new InvalidOperationException($"Toolchain '{Id}' has no policy for profile '{profile}'.");
+        var profile = configuration.Values.Single(value => value.Fragment.Value == "Profile").Value;
+        var match = Profiles.FirstOrDefault(pair => pair.Key.Equals(profile, StringComparison.OrdinalIgnoreCase));
+        return match.Value
+            ?? throw new InvalidOperationException($"Toolchain '{Id}' has no policy for profile '{profile}'.");
     }
 }
 

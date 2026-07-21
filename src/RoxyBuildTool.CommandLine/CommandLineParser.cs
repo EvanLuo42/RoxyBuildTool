@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Text;
 using RoxyBuildTool.Abstractions;
 
 namespace RoxyBuildTool.CommandLine;
@@ -64,20 +65,20 @@ public static class CommandLineParser
                 case "--workspace":
                     foreach (var generator in NextValue(option).Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
                     {
-                        generators.Add(generator);
+                        generators.Add(ToPascalCase(generator));
                     }
                     break;
                 case "--platform":
-                    selectors[new("platform")] = NextValue(option);
+                    selectors[new("Platform")] = ToPascalCase(NextValue(option));
                     break;
                 case "--arch":
-                    selectors[new("architecture")] = NextValue(option);
+                    selectors[new("Architecture")] = ToPascalCase(NextValue(option));
                     break;
                 case "--profile":
-                    selectors[new("profile")] = NextValue(option);
+                    selectors[new("Profile")] = ToPascalCase(NextValue(option));
                     break;
                 case "--toolchain":
-                    selectors[new("toolchain")] = NextValue(option);
+                    selectors[new("Toolchain")] = ToPascalCase(NextValue(option));
                     break;
                 case "--fragment":
                     var assignment = NextValue(option).Split('=', 2);
@@ -85,10 +86,10 @@ public static class CommandLineParser
                     {
                         throw new CommandLineException("--fragment expects <id>=<value>.");
                     }
-                    selectors[new(assignment[0])] = assignment[1];
+                    selectors[new(ToPascalCase(assignment[0]))] = ToPascalCase(assignment[1]);
                     break;
                 case "--setting":
-                    setting = NextValue(option);
+                    setting = ToPascalCase(NextValue(option));
                     break;
                 case "--why-excluded":
                     whyExcluded = true;
@@ -123,6 +124,31 @@ public static class CommandLineParser
     {
         index++;
         return kind;
+    }
+
+    private static string ToPascalCase(string value)
+    {
+        var result = new StringBuilder(value.Length);
+        var capitalizeNext = true;
+        foreach (var character in value)
+        {
+            if (character == '.')
+            {
+                result.Append(character);
+                capitalizeNext = true;
+            }
+            else if (character is '-' or '_')
+            {
+                capitalizeNext = true;
+            }
+            else
+            {
+                result.Append(capitalizeNext ? char.ToUpperInvariant(character) : character);
+                capitalizeNext = false;
+            }
+        }
+
+        return result.ToString();
     }
 }
 

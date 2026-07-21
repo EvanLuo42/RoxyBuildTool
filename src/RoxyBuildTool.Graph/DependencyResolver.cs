@@ -144,10 +144,10 @@ public static class DependencyResolver
         TargetDefinition target,
         ConfigurationKey configuration)
     {
-        var platform = GetValue(configuration, "platform");
-        var architecture = GetValue(configuration, "architecture");
-        var profile = GetValue(configuration, "profile");
-        var outputRoot = $"out/{platform}/{architecture}/{profile}/{target.Id}";
+        var platform = GetValue(configuration, "Platform");
+        var architecture = GetValue(configuration, "Architecture");
+        var profile = GetValue(configuration, "Profile");
+        var outputRoot = $"out/{platform.ToLowerInvariant()}/{architecture.ToLowerInvariant()}/{profile.ToLowerInvariant()}/{target.Id}";
         return module.Kind switch
         {
             ModuleKind.StaticLibrary => new([], [], [new($"{outputRoot}/{module.Id}.lib", $"{module.Id}:artifact")],

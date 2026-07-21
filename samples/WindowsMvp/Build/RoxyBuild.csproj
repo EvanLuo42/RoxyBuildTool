@@ -16,5 +16,6 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="../**/*.Module.cs" Link="Modules/%(RecursiveDir)%(Filename)%(Extension)" />
+    <None Remove="packages.lock.json" />
   </ItemGroup>
 </Project>

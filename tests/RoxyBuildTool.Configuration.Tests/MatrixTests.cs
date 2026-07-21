@@ -5,7 +5,7 @@ using Xunit;
 
 namespace RoxyBuildTool.Configuration.Tests;
 
-[BuildFragment("game.flavor")]
+[BuildFragment("Game.Flavor")]
 public enum GameFlavor
 {
     Editor = 900,
@@ -13,7 +13,7 @@ public enum GameFlavor
     DedicatedServer = 42,
 }
 
-[BuildFragment("game.flavor")]
+[BuildFragment("Game.Flavor")]
 public enum ConflictingFlavor
 {
     Other,
@@ -36,7 +36,7 @@ public sealed class MatrixTests
         ]);
 
         Assert.Equal(
-            "architecture=x64;game.flavor=dedicated-server;link-model=modular;platform=windows;profile=development;toolchain=msvc-14.4",
+            "Architecture=X64;Game.Flavor=DedicatedServer;LinkModel=Modular;Platform=Windows;Profile=Development;Toolchain=Msvc14.4",
             key.Canonical);
     }
 
@@ -54,7 +54,7 @@ public sealed class MatrixTests
         Assert.Equal(8, result.Configurations.Length);
         Assert.Equal(11, result.CandidateCount);
         Assert.Contains(result.Excluded, excluded =>
-            excluded.AssignedPrefix == "game.flavor=dedicated-server" &&
+            excluded.AssignedPrefix == "Game.Flavor=DedicatedServer" &&
             excluded.Reason == "Dedicated server disabled");
     }
 
@@ -86,14 +86,14 @@ public sealed class MatrixTests
             .Build();
         var selectors = new Dictionary<FragmentId, string>
         {
-            [FragmentIds.Profile] = "development",
-            [new("game.flavor")] = "editor",
+            [FragmentIds.Profile] = "Development",
+            [new("Game.Flavor")] = "Editor",
         };
 
         var result = new MatrixResolver(new()).Resolve(matrix, selectors);
 
         var configuration = Assert.Single(result.Configurations);
-        Assert.Equal("game.flavor=editor;profile=development", configuration.Canonical);
+        Assert.Equal("Game.Flavor=Editor;Profile=Development", configuration.Canonical);
     }
 
     [Fact]

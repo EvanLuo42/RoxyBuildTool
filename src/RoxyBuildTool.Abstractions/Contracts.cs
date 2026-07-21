@@ -1,24 +1,56 @@
 using System.Collections.Immutable;
+using System.Text;
 using System.Text.RegularExpressions;
 
 namespace RoxyBuildTool.Abstractions;
 
 internal static partial class StableIdSyntax
 {
-    [GeneratedRegex("^[a-z0-9][a-z0-9._-]*$", RegexOptions.CultureInvariant)]
+    [GeneratedRegex("^[A-Z][A-Za-z0-9]*(?:\\.[A-Z0-9][A-Za-z0-9]*)*$", RegexOptions.CultureInvariant)]
     private static partial Regex Pattern();
 
     public static string Validate(string value, string parameterName)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(value, parameterName);
-        if (!Pattern().IsMatch(value))
+        if (!char.IsAsciiLetterOrDigit(value[0]))
+        {
+            throw new ArgumentException($"'{value}' is not a stable ID.", parameterName);
+        }
+
+        var normalized = Normalize(value);
+        if (!Pattern().IsMatch(normalized))
         {
             throw new ArgumentException(
-                $"'{value}' is not a stable ID. Use lower-case ASCII letters, digits, '.', '_' or '-'.",
+                $"'{value}' is not a stable ID. Use dot-separated PascalCase ASCII segments.",
                 parameterName);
         }
 
-        return value;
+        return normalized;
+    }
+
+    private static string Normalize(string value)
+    {
+        var result = new StringBuilder(value.Length);
+        var capitalizeNext = true;
+        foreach (var character in value)
+        {
+            if (character == '.')
+            {
+                result.Append(character);
+                capitalizeNext = true;
+            }
+            else if (character is '-' or '_')
+            {
+                capitalizeNext = true;
+            }
+            else
+            {
+                result.Append(capitalizeNext ? char.ToUpperInvariant(character) : character);
+                capitalizeNext = false;
+            }
+        }
+
+        return result.ToString();
     }
 }
 

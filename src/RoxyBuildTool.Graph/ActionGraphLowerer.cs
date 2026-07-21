@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using RoxyBuildTool.Configuration;
 using RoxyBuildTool.Model;
 using RoxyBuildTool.Toolchains;
 
@@ -11,10 +12,10 @@ public static class ActionGraphLowerer
         var actions = ImmutableArray.CreateBuilder<BuildAction>();
         var artifacts = ImmutableArray.CreateBuilder<BuildArtifact>();
         var finalActions = new Dictionary<string, string>(StringComparer.Ordinal);
-        var platform = Value(graph.Configuration, "platform");
-        var architecture = Value(graph.Configuration, "architecture");
-        var profile = Value(graph.Configuration, "profile");
-        var outputRoot = $"out/{platform}/{architecture}/{profile}/{graph.Target.Id}";
+        var platform = Value(graph.Configuration, "Platform");
+        var architecture = Value(graph.Configuration, "Architecture");
+        var profile = Value(graph.Configuration, "Profile");
+        var outputRoot = $"out/{platform.ToLowerInvariant()}/{architecture.ToLowerInvariant()}/{profile.ToLowerInvariant()}/{graph.Target.Id}";
         var intermediateRoot = $"intermediate/{graph.Configuration.ShortHash}/{graph.Target.Id}";
         var policy = toolchain.GetPolicy(graph.Configuration);
 
@@ -85,7 +86,7 @@ public static class ActionGraphLowerer
                 actions.Add(new(finalActionId, BuildActionKind.Archive, toolchain.Librarian,
                     ["/nologo", $"/OUT:{output}", .. objectPaths], new("."), [.. objectPaths], [output], dependencies,
                     ["LIB", "TMP", "TEMP"], true, false, []));
-                artifacts.Add(new($"{module.Id}:static-library", ArtifactKind.StaticLibrary, new(output), finalActionId));
+                artifacts.Add(new($"{module.Id}:StaticLibrary", ArtifactKind.StaticLibrary, new(output), finalActionId));
             }
             else
             {
@@ -143,8 +144,8 @@ public static class ActionGraphLowerer
                 ? targetName
                 : $"{moduleName}.{targetName}";
             var project = $".roxy/generated/vs2022/{workspaceName}/{projectName}.csproj";
-            var restoreId = ActionId(module.Id, "dotnet-restore");
-            var buildId = ActionId(module.Id, "dotnet-build");
+            var restoreId = ActionId(module.Id, "DotnetRestore");
+            var buildId = ActionId(module.Id, "DotnetBuild");
             var dependencies = DependencyActions(module);
             actions.Add(new(restoreId, BuildActionKind.DotNetRestore, "dotnet",
                 ["restore", project, "--locked-mode"], new("."), [project], [$"{intermediateRoot}/{module.Id}/restore.stamp"],
@@ -154,7 +155,7 @@ public static class ActionGraphLowerer
                 ["build", project, "--no-restore", "--configuration", profile, $"-p:RoxyConfigurationHash={graph.Configuration.ShortHash}"],
                 new("."), [project, .. module.Sources.Select(source => source.Value)], [assembly],
                 [restoreId, .. dependencies], ["DOTNET_ROOT", "NUGET_PACKAGES", "TMP", "TEMP"], true, false, []));
-            artifacts.Add(new($"{module.Id}:managed-assembly", ArtifactKind.ManagedAssembly, new(assembly), buildId));
+            artifacts.Add(new($"{module.Id}:ManagedAssembly", ArtifactKind.ManagedAssembly, new(assembly), buildId));
             var finalAction = buildId;
             foreach (var runtime in module.CompileUsage.RuntimeFiles.OrderBy(value => value.Value, StringComparer.Ordinal))
             {
@@ -179,7 +180,7 @@ public static class ActionGraphLowerer
             .ToImmutableArray();
 
         string ActionId(string module, string operation) =>
-            $"{graph.Target.Id}:{graph.Configuration.ShortHash}:{module}:{operation}";
+            $"{graph.Target.Id}:{graph.Configuration.ShortHash}:{module}:{FragmentRegistry.ToPascalCase(operation)}";
     }
 
     private static ImmutableArray<ConfiguredModule> TopologicalOrder(ImmutableArray<ConfiguredModule> modules)

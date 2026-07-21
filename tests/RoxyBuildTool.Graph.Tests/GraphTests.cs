@@ -36,19 +36,19 @@ public sealed class GraphTests
     {
         var definitions = new DefinitionGraph([
             Module("runtime", ModuleKind.SharedLibrary, sources: ["src/runtime.cpp"]),
-            Module("native-app", ModuleKind.Executable, sources: ["src/main.cpp"], dependencies: [new("runtime", DependencyVisibility.Private)]),
-            Module("managed-app", ModuleKind.CSharpConsoleApplication, ModuleLanguage.CSharp,
+            Module("NativeApp", ModuleKind.Executable, sources: ["src/main.cpp"], dependencies: [new("runtime", DependencyVisibility.Private)]),
+            Module("ManagedApp", ModuleKind.CSharpConsoleApplication, ModuleLanguage.CSharp,
                 sources: ["managed/Program.cs"], dependencies: [new("runtime", DependencyVisibility.Runtime)]),
-        ], [Target("mixed", ["native-app", "managed-app"])], []);
+        ], [Target("mixed", ["NativeApp", "ManagedApp"])], []);
         var configured = DependencyResolver.Resolve(definitions, definitions.Targets[0], TestConfiguration());
 
-        var actions = ActionGraphLowerer.Lower(configured, Toolchain(), "mixed-workspace");
+        var actions = ActionGraphLowerer.Lower(configured, Toolchain(), "MixedWorkspace");
 
         Assert.Contains(actions.Actions, action => action.Kind == BuildActionKind.Compile);
         Assert.Contains(actions.Actions, action => action.Kind == BuildActionKind.Link);
         Assert.Contains(actions.Actions, action => action.Kind == BuildActionKind.DotNetRestore);
         Assert.Contains(actions.Actions, action => action.Kind == BuildActionKind.DotNetBuild);
-        Assert.Contains(actions.Actions, action => action.Kind == BuildActionKind.Copy && action.Id.Contains("managed-app", StringComparison.Ordinal));
+        Assert.Contains(actions.Actions, action => action.Kind == BuildActionKind.Copy && action.Id.Contains("ManagedApp", StringComparison.Ordinal));
         Assert.Empty(actions.Validate());
         Assert.All(actions.Actions.Where(action => action.Kind is BuildActionKind.DotNetBuild or BuildActionKind.DotNetRestore),
             action => Assert.False(action.RemoteExecutable));
@@ -102,7 +102,7 @@ public sealed class GraphTests
     ]);
 
     private static ToolchainDescriptor Toolchain() => new(
-        new("msvc-14.4"),
+        new("Msvc14.4"),
         new("windows"),
         "x64",
         "cl.exe",

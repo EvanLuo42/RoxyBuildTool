@@ -8,41 +8,41 @@ namespace RoxyBuildTool.Configuration;
 
 public static class FragmentIds
 {
-    public static FragmentId Platform { get; } = new("platform");
-    public static FragmentId Architecture { get; } = new("architecture");
-    public static FragmentId Profile { get; } = new("profile");
-    public static FragmentId Toolchain { get; } = new("toolchain");
-    public static FragmentId LinkModel { get; } = new("link-model");
+    public static FragmentId Platform { get; } = new("Platform");
+    public static FragmentId Architecture { get; } = new("Architecture");
+    public static FragmentId Profile { get; } = new("Profile");
+    public static FragmentId Toolchain { get; } = new("Toolchain");
+    public static FragmentId LinkModel { get; } = new("LinkModel");
 }
 
 public static class Platforms
 {
-    public static FragmentValue Windows { get; } = new(FragmentIds.Platform, "windows");
+    public static FragmentValue Windows { get; } = new(FragmentIds.Platform, "Windows");
 }
 
 public static class Architectures
 {
-    public static FragmentValue X64 { get; } = new(FragmentIds.Architecture, "x64");
+    public static FragmentValue X64 { get; } = new(FragmentIds.Architecture, "X64");
 }
 
 public static class BuildProfiles
 {
-    public static FragmentValue Debug { get; } = new(FragmentIds.Profile, "debug");
-    public static FragmentValue Development { get; } = new(FragmentIds.Profile, "development");
-    public static FragmentValue Release { get; } = new(FragmentIds.Profile, "release");
-    public static FragmentValue Shipping { get; } = new(FragmentIds.Profile, "shipping");
+    public static FragmentValue Debug { get; } = new(FragmentIds.Profile, "Debug");
+    public static FragmentValue Development { get; } = new(FragmentIds.Profile, "Development");
+    public static FragmentValue Release { get; } = new(FragmentIds.Profile, "Release");
+    public static FragmentValue Shipping { get; } = new(FragmentIds.Profile, "Shipping");
     public static ImmutableArray<FragmentValue> All { get; } = [Debug, Development, Release, Shipping];
 }
 
 public static class Toolchains
 {
-    public static FragmentValue Msvc { get; } = new(FragmentIds.Toolchain, "msvc-14.4");
+    public static FragmentValue Msvc { get; } = new(FragmentIds.Toolchain, "Msvc14.4");
 }
 
 public static class LinkModels
 {
-    public static FragmentValue Modular { get; } = new(FragmentIds.LinkModel, "modular");
-    public static FragmentValue Monolithic { get; } = new(FragmentIds.LinkModel, "monolithic");
+    public static FragmentValue Modular { get; } = new(FragmentIds.LinkModel, "Modular");
+    public static FragmentValue Monolithic { get; } = new(FragmentIds.LinkModel, "Monolithic");
 }
 
 public sealed record FragmentMetadata(
@@ -112,20 +112,28 @@ public sealed class FragmentRegistry
         _metadata.Add(id, new(id, null, values));
 
     private static string GetValueId(FieldInfo field) =>
-        field.GetCustomAttribute<FragmentValueAttribute>()?.Id ?? ToKebabCase(field.Name);
+        field.GetCustomAttribute<FragmentValueAttribute>()?.Id ?? field.Name;
 
-    public static string ToKebabCase(string value)
+    public static string ToPascalCase(string value)
     {
-        var result = new StringBuilder(value.Length + 4);
-        for (var index = 0; index < value.Length; index++)
+        var result = new StringBuilder(value.Length);
+        var capitalizeNext = true;
+        foreach (var character in value)
         {
-            var character = value[index];
-            if (char.IsUpper(character) && index > 0 && (char.IsLower(value[index - 1]) || char.IsDigit(value[index - 1])))
+            if (character == '.')
             {
-                result.Append('-');
+                result.Append(character);
+                capitalizeNext = true;
             }
-
-            result.Append(char.ToLowerInvariant(character));
+            else if (character is '-' or '_')
+            {
+                capitalizeNext = true;
+            }
+            else
+            {
+                result.Append(capitalizeNext ? char.ToUpperInvariant(character) : character);
+                capitalizeNext = false;
+            }
         }
 
         return result.ToString();

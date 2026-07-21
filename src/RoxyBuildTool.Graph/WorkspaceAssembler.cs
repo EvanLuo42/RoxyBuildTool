@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using RoxyBuildTool.Configuration;
 using RoxyBuildTool.Model;
 
 namespace RoxyBuildTool.Graph;
@@ -15,7 +16,7 @@ public static class WorkspaceAssembler
         var actions = actionGraphs.OrderBy(graph => graph.Target, StringComparer.Ordinal)
             .ThenBy(graph => graph.Configuration).ToImmutableArray();
         var projects = graphs.SelectMany(graph => graph.Modules.Select(module => (graph, module)))
-            .GroupBy(pair => $"{pair.graph.Target.Id}.{pair.module.Id}", StringComparer.Ordinal)
+            .GroupBy(pair => FragmentRegistry.ToPascalCase($"{pair.graph.Target.Id}.{pair.module.Id}"), StringComparer.Ordinal)
             .Select(group =>
             {
                 var firstPair = group.First();
@@ -40,16 +41,23 @@ public static class WorkspaceAssembler
                         .ThenBy(variant => variant.Configuration)
                         .ToImmutableArray(),
                     group.SelectMany(pair => pair.module.Dependencies)
-                        .Select(dependency => $"{targetId}.{dependency.Module}").Distinct(StringComparer.Ordinal)
+                        .Select(dependency => FragmentRegistry.ToPascalCase($"{targetId}.{dependency.Module}"))
+                        .Distinct(StringComparer.Ordinal)
                         .Order(StringComparer.Ordinal).ToImmutableArray());
             })
             .OrderBy(project => project.Id, StringComparer.Ordinal)
             .ToImmutableArray();
 
+        var projectIds = projects.Select(project => project.Id).ToImmutableHashSet(StringComparer.Ordinal);
+        projects = projects.Select(project => project with
+        {
+            ProjectDependencies = project.ProjectDependencies.Where(projectIds.Contains).ToImmutableArray(),
+        }).ToImmutableArray();
+
         if (definition.IncludeBuildHost && definition.BuildHostProject is not null)
         {
             projects = projects.Add(new(
-                "build-rules",
+                "BuildRules",
                 "Build Rules",
                 ModuleLanguage.CSharp,
                 [],

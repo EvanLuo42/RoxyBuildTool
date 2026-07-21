@@ -13,8 +13,8 @@ public sealed class CompilationDatabaseGenerator : IWorkspaceGenerator
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
     };
 
-    public WorkspaceGeneratorId Id { get; } = new("compile-db");
-    public CapabilitySet Capabilities { get; } = new(["compile-commands", "arguments-array"]);
+    public WorkspaceGeneratorId Id { get; } = new("CompileDb");
+    public CapabilitySet Capabilities { get; } = new(["CompileCommands", "ArgumentsArray"]);
 
     public GenerationResult Generate(WorkspaceModel workspace, GenerationContext context)
     {
@@ -42,9 +42,9 @@ public sealed class CompilationDatabaseGenerator : IWorkspaceGenerator
 
 public sealed class CompilationDatabasePlugin : IPlugin
 {
-    public PluginId Id { get; } = new("roxy.generator.compile-db");
+    public PluginId Id { get; } = new("Roxy.Generator.CompileDb");
     public Version Version { get; } = new(0, 1, 0);
-    public CapabilitySet Capabilities { get; } = new(["workspace.compile-db"]);
+    public CapabilitySet Capabilities { get; } = new(["Workspace.CompileDb"]);
     public void Register(IPluginRegistry registry) => registry.AddService<IWorkspaceGenerator>(new CompilationDatabaseGenerator());
 }
 

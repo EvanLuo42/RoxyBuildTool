@@ -48,7 +48,7 @@ public class ConfigureAttribute : Attribute
 public sealed class ConfigureAttribute<TFragment> : ConfigureAttribute where TFragment : struct, Enum
 {
     public ConfigureAttribute(params string[] values)
-        : base(GetFragmentId(), values.Select(FragmentRegistry.ToKebabCase).ToArray())
+        : base(GetFragmentId(), values.Select(FragmentRegistry.ToPascalCase).ToArray())
     {
     }
 
@@ -135,7 +135,7 @@ public sealed class BuildRegistry(string workspaceRoot)
             }
         }
 
-        return FragmentRegistry.ToKebabCase(name);
+        return FragmentRegistry.ToPascalCase(name);
     }
 
     private ModuleDefinition BuildModule(Type type)

@@ -5,7 +5,7 @@ using RoxyBuildTool.Abstractions;
 
 namespace RoxyBuildTool.Model;
 
-public readonly record struct FragmentValue : IComparable<FragmentValue>
+public readonly partial record struct FragmentValue : IComparable<FragmentValue>
 {
     public FragmentValue(FragmentId fragment, string value)
     {
@@ -19,13 +19,18 @@ public readonly record struct FragmentValue : IComparable<FragmentValue>
     private static string ValidateValue(string value)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(value);
-        if (value.Any(character => !(character is >= 'a' and <= 'z' or >= '0' and <= '9' or '.' or '_' or '-')))
+        var normalized = ConfigurationlessPascalCase.Normalize(value);
+        if (!StableIdPattern().IsMatch(normalized))
         {
             throw new ArgumentException($"'{value}' is not a stable fragment value ID.", nameof(value));
         }
 
-        return value;
+        return normalized;
     }
+
+    [System.Text.RegularExpressions.GeneratedRegex("^[A-Z][A-Za-z0-9]*(?:\\.[A-Z0-9][A-Za-z0-9]*)*$",
+        System.Text.RegularExpressions.RegexOptions.CultureInvariant)]
+    private static partial System.Text.RegularExpressions.Regex StableIdPattern();
 
     public int CompareTo(FragmentValue other)
     {
@@ -41,6 +46,34 @@ public readonly record struct FragmentValue : IComparable<FragmentValue>
     public static bool operator >=(FragmentValue left, FragmentValue right) => left.CompareTo(right) >= 0;
 
     public override string ToString() => $"{Fragment}={Value}";
+}
+
+internal static class ConfigurationlessPascalCase
+{
+    public static string Normalize(string value)
+    {
+        var result = new StringBuilder(value.Length);
+        var capitalizeNext = true;
+        foreach (var character in value)
+        {
+            if (character == '.')
+            {
+                result.Append(character);
+                capitalizeNext = true;
+            }
+            else if (character is '-' or '_')
+            {
+                capitalizeNext = true;
+            }
+            else
+            {
+                result.Append(capitalizeNext ? char.ToUpperInvariant(character) : character);
+                capitalizeNext = false;
+            }
+        }
+
+        return result.ToString();
+    }
 }
 
 public sealed record ConfigurationKey : IComparable<ConfigurationKey>

@@ -114,6 +114,7 @@ public sealed class MatrixResolver(FragmentRegistry registry)
             var values = axis.Values;
             if (selectors.TryGetValue(axis.Fragment, out var selected))
             {
+                selected = FragmentRegistry.ToPascalCase(selected);
                 values = values.Where(value => value.Value == selected).ToImmutableArray();
                 if (values.IsEmpty)
                 {

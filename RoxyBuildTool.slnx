@@ -16,5 +16,6 @@
     <Project Path="tests/RoxyBuildTool.Graph.Tests/RoxyBuildTool.Graph.Tests.csproj" />
     <Project Path="tests/RoxyBuildTool.BackendGoldenTests/RoxyBuildTool.BackendGoldenTests.csproj" />
     <Project Path="tests/RoxyBuildTool.IntegrationTests/RoxyBuildTool.IntegrationTests.csproj" />
+    <Project Path="tests/RoxyBuildTool.FakeMsBuild/RoxyBuildTool.FakeMsBuild.csproj" />
   </Folder>
 </Solution>

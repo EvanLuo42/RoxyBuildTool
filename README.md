@@ -32,7 +32,7 @@ public sealed class EngineCoreModule : CxxModule
 }
 ```
 
-抽象 Target 基类上的 `[Configure]` 会被继承，适合复用公共平台矩阵。稳定内部 ID 使用小写 kebab-case；生成的工程名使用可读名称；solution configuration 例如 `Development Client | Win64`，内部 architecture 仍是 `x64`。
+抽象 Target 基类上的 `[Configure]` 会被继承，适合复用公共平台矩阵。稳定内部 ID 使用 PascalCase，分段 ID 的每一段也使用 PascalCase（例如 `Game.Flavor`）；生成的工程名使用可读名称；solution configuration 例如 `Development Client | Win64`，内部 architecture ID 为 `X64`。
 
 ## 示例
 
@@ -41,10 +41,10 @@ cd samples/WindowsMvp/Build
 dotnet restore
 dotnet run
 dotnet run -- query matrix GameTarget
-dotnet run -- build GameTarget --platform windows --arch x64 --profile development --fragment game.flavor=client
+dotnet run -- build GameTarget --platform Windows --arch X64 --profile Development --fragment Game.Flavor=Client
 ```
 
-完整 workspace 位于 `samples/WindowsMvp/.roxy/generated/vs2022/game/GameWorkspace.sln`。单 target build 使用独立的内部 solution，不会覆盖 Rider 正在打开的完整 workspace。
+完整 workspace 位于 `samples/WindowsMvp/.roxy/generated/Vs2022/Game/GameWorkspace.sln`。单 target build 使用独立的内部 solution，不会覆盖 Rider 正在打开的完整 workspace。
 
 Roxy 不在生成工程中加入 MSBuild fallback。Rider 的 `Toolset and Build → MSBuild version` 是整个混合 solution 的全局选择；CLI 可通过 `WithMsBuild(path)` 或 `MSBUILD_EXE_PATH` 选择同一个 toolset。`.NET SDK 10.0.3xx` 与 `net10.0` 混合 `.vcxproj` workspace 需要同时带 .NET 10 和 VC targets 的 MSBuild 18.x（Visual Studio 2026），不能使用只含 Core MSBuild 的 SDK 目录替代 C++ targets。
 

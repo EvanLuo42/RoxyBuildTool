@@ -21,7 +21,7 @@
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Development|x64'">
     <OutDir>$(RoxyWorkspaceRoot)\out\windows\x64\development\mini\</OutDir>
-    <IntDir>$(RoxyWorkspaceRoot)\intermediate\5988ed77bc7d\mini.mini\</IntDir>
+    <IntDir>$(RoxyWorkspaceRoot)\intermediate\3aef536a1c9e\mini.mini\</IntDir>
     <TargetName>mini</TargetName>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Development|x64'">

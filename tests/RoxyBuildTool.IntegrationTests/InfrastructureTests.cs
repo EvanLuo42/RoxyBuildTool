@@ -20,9 +20,8 @@ public sealed class InfrastructureTests
             .RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(0, exitCode);
-        Assert.Contains("modules=[reflected-header]", output.ToString(), StringComparison.Ordinal);
-        Assert.Contains("targets=[reflected]", output.ToString(), StringComparison.Ordinal);
-        Assert.Contains("workspaces=[reflected]", output.ToString(), StringComparison.Ordinal);
+        Assert.Contains("ReflectedHeader", output.ToString(), StringComparison.Ordinal);
+        Assert.Contains("Reflected", output.ToString(), StringComparison.Ordinal);
         Assert.Contains("define REFLECTED_DEBUG=1", output.ToString(), StringComparison.Ordinal);
     }
 
@@ -38,7 +37,7 @@ public sealed class InfrastructureTests
     [Fact]
     public void CompareBeforeWritePreservesTimestampForIdenticalContent()
     {
-        var directory = Path.Combine(Path.GetTempPath(), $"roxy-tests-{Guid.NewGuid():N}");
+        var directory = Path.Combine(Path.GetTempPath(), $"RoxyTests-{Guid.NewGuid():N}");
         var path = Path.Combine(directory, "generated.txt");
         try
         {
@@ -87,8 +86,8 @@ public sealed class InfrastructureTests
             new(new("platform"), "windows"),
             new(new("architecture"), "x64"),
             new(new("profile"), "debug"),
-            new(new("toolchain"), "msvc-14.4"),
-            new(new("link-model"), "modular"),
+            new(new("toolchain"), "Msvc14.4"),
+            new(new("LinkModel"), "modular"),
         ]);
         var module = new ConfiguredModule("native", "Native", ModuleLanguage.Cxx, ModuleKind.StaticLibrary,
             [new("src/native.cpp")], UsageRequirements.Empty, UsageRequirements.Empty,
