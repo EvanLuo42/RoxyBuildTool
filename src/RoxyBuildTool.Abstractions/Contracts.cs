@@ -208,8 +208,17 @@ public interface IPlugin
     /// <summary>Gets the plugin implementation version.</summary>
     Version Version { get; }
 
+    /// <summary>Gets the oldest host contract version accepted by this plugin.</summary>
+    Version MinimumHostApiVersion => new(0, 1, 0);
+
+    /// <summary>Gets the newest host contract version accepted by this plugin, or null for no upper bound.</summary>
+    Version? MaximumHostApiVersion => null;
+
     /// <summary>Gets the capabilities exposed by the plugin.</summary>
     CapabilitySet Capabilities { get; }
+
+    /// <summary>Gets capabilities that must be supplied by the composed plugin set.</summary>
+    CapabilitySet RequiredCapabilities => CapabilitySet.Empty;
 
     /// <summary>Registers plugin services for the current invocation.</summary>
     void Register(IPluginRegistry registry);

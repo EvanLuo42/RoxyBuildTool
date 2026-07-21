@@ -116,16 +116,70 @@ public sealed class GeneratorBoundaryTests
     }
 
     [Fact]
+    public void NativeGenerationPreservesAdvancedSettingsAndRootedIncludePaths()
+    {
+        var configuration = Configuration(BuildProfiles.Development);
+        var module = Module("application", "Application", ModuleKind.Executable,
+                ["src/pch.cpp", "src/main.cpp"]) with
+            {
+                CompileUsage = new UsageRequirements(
+                    [new UsageValue("C:/vendor/include", "test")], [],
+                    [new UsageValue("$(VendorRoot)/lib/vendor.lib", "test")], [],
+                    [new UsageValue("$(UniversalCRTSdkDir)Include", "test")]),
+                CxxSettings = new CxxModuleSettings(
+                    ["/permissive-"], ["/OPT:REF"], [], [new LogicalPath("config/forced.h")],
+                    new LogicalPath("include/pch.h"), new LogicalPath("src/pch.cpp"), "CustomGame")
+            };
+        var model = new WorkspaceModel("Advanced", "app",
+            [Project("application", "Application", [new WorkspaceProjectVariant("app", configuration, module)])], [],
+            []);
+
+        var project = Parse(Generator().Generate(model, Context("advanced")), "Application.vcxproj");
+        var properties = Assert.Single(project.Descendants(MsBuild + "PropertyGroup"),
+            element => element.Element(MsBuild + "TargetName") is not null);
+        var compile = Assert.Single(project.Descendants(MsBuild + "ClCompile"),
+            element => element.Element(MsBuild + "LanguageStandard") is not null);
+        var pchSource = project.Descendants(MsBuild + "ClCompile").Single(element =>
+            ((string?)element.Attribute("Include"))?.EndsWith("pch.cpp", StringComparison.Ordinal) == true);
+        var mainSource = project.Descendants(MsBuild + "ClCompile").Single(element =>
+            ((string?)element.Attribute("Include"))?.EndsWith("main.cpp", StringComparison.Ordinal) == true);
+
+        Assert.Equal("CustomGame", properties.Element(MsBuild + "TargetName")?.Value);
+        Assert.Contains("C:\\vendor\\include",
+            compile.Element(MsBuild + "AdditionalIncludeDirectories")?.Value, StringComparison.Ordinal);
+        Assert.DoesNotContain("$(RoxyWorkspaceRoot)\\C:\\vendor",
+            compile.Element(MsBuild + "AdditionalIncludeDirectories")?.Value, StringComparison.Ordinal);
+        Assert.Contains("$(UniversalCRTSdkDir)Include",
+            compile.Element(MsBuild + "ExternalIncludePath")?.Value, StringComparison.Ordinal);
+        Assert.Contains("$(RoxyWorkspaceRoot)\\config\\forced.h",
+            compile.Element(MsBuild + "ForcedIncludeFiles")?.Value, StringComparison.Ordinal);
+        Assert.Contains("/permissive-", compile.Element(MsBuild + "AdditionalOptions")?.Value,
+            StringComparison.Ordinal);
+        Assert.Contains("/OPT:REF", Assert.Single(project.Descendants(MsBuild + "Link"))
+            .Element(MsBuild + "AdditionalOptions")?.Value, StringComparison.Ordinal);
+        Assert.Contains("$(VendorRoot)/lib/vendor.lib", Assert.Single(project.Descendants(MsBuild + "Link"))
+            .Element(MsBuild + "AdditionalDependencies")?.Value, StringComparison.Ordinal);
+        Assert.DoesNotContain("$(RoxyWorkspaceRoot)\\$(VendorRoot)", project.ToString(),
+            StringComparison.Ordinal);
+        Assert.Equal("Create", pchSource.Element(MsBuild + "PrecompiledHeader")?.Value);
+        Assert.Equal("Use", mainSource.Element(MsBuild + "PrecompiledHeader")?.Value);
+        Assert.Equal("include\\pch.h", pchSource.Element(MsBuild + "PrecompiledHeaderFile")?.Value);
+    }
+
+    [Fact]
     public void ManagedGenerationCoversDefaultsPackagesVariantsAndDirectoryProps()
     {
         var debug = Configuration(BuildProfiles.Debug);
         var shipping = Configuration(BuildProfiles.Shipping);
         var debugModule = Managed("library", "Managed Library", ModuleKind.CSharpClassLibrary, debug,
-            targetFrameworks: [], packages:
-            [
-                new("Private.Package", "2.0.0", true),
-                new("Public.Package", "1.0.0"),
-            ]);
+                [], [
+                    new PackageReferenceModel("Private.Package", "2.0.0", true),
+                    new PackageReferenceModel("Public.Package", "1.0.0")
+                ]) with
+            {
+                CompileUsage =
+                new UsageRequirements([], [], [], [new UsageValue("$(VendorRoot)/bin/runtime.dll", "test")])
+            };
         var shippingModule = debugModule with
         {
             Sources = [new("managed/Library.cs"), new("managed/Shipping.cs")],
@@ -133,6 +187,7 @@ public sealed class GeneratorBoundaryTests
             TargetFrameworks = ["net9.0"],
             Kind = ModuleKind.CSharpConsoleApplication,
             RootNamespace = "Managed.Shipping",
+            CompileUsage = UsageRequirements.Empty
         };
         var project = new WorkspaceProject("library", "Managed Library", ModuleLanguage.CSharp,
             [new("app", debug, debugModule), new("app", shipping, shippingModule)], []);
@@ -152,7 +207,9 @@ public sealed class GeneratorBoundaryTests
             element => Assert.NotNull(element.Parent?.Attribute("Condition")));
         Assert.Equal(["Library.cs", "Shipping.cs"], document.Descendants("Compile")
             .Select(element => Path.GetFileName((string)element.Attribute("Include")!)));
-        Assert.Empty(document.Descendants("Content"));
+        var runtime = Assert.Single(document.Descendants("Content"));
+        Assert.Equal("$(VendorRoot)\\bin\\runtime.dll", runtime.Attribute("Include")?.Value);
+        Assert.Equal(Condition(debug), runtime.Parent?.Attribute("Condition")?.Value);
         var packages = document.Descendants("PackageReference").ToDictionary(
             element => (string)element.Attribute("Include")!, StringComparer.Ordinal);
         Assert.Equal("all", (string?)packages["Private.Package"].Attribute("PrivateAssets"));

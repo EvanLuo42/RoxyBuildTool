@@ -5,19 +5,21 @@ using RoxyBuildTool.Toolchains;
 
 namespace RoxyBuildTool.Graph;
 
-/// <summary>Lowers a configured graph into structured compiler, linker, copy, and .NET actions.</summary>
+/// <summary>Lowers a configured graph into structured native compiler, linker, archive, and copy actions.</summary>
 public static class ActionGraphLowerer
 {
+    private static readonly LogicalPath WorkingDirectory = new(".");
+    private static readonly ImmutableArray<string> CompileEnvironment = ["INCLUDE", "TMP", "TEMP"];
+    private static readonly ImmutableArray<string> LibraryEnvironment = ["LIB", "TMP", "TEMP"];
+
     /// <summary>Creates the action graph for one configured target and toolchain.</summary>
     public static ActionGraph Lower(ConfiguredGraph graph, ToolchainDescriptor toolchain, string workspaceName)
     {
         var actions = ImmutableArray.CreateBuilder<BuildAction>();
         var artifacts = ImmutableArray.CreateBuilder<BuildArtifact>();
         var finalActions = new Dictionary<string, ImmutableArray<string>>(StringComparer.Ordinal);
-        var configurationName = BuildConfigurationNames.DisplayName(graph.Configuration);
         var outputRoot = BuildPathLayout.OutputRoot(graph.Configuration, graph.Target.Id);
         var policy = toolchain.GetPolicy(graph.Configuration);
-        var msbuildPlatform = toolchain.Architecture.ToLowerInvariant();
 
         foreach (var module in TopologicalOrder(graph.Modules))
         {
@@ -44,40 +46,100 @@ public static class ActionGraphLowerer
 
         void LowerCxx(ConfiguredModule module)
         {
-            var objectActions = new List<string>();
-            var objectPaths = new List<string>();
+            var objectActions = new List<string>(module.Sources.Length);
+            var objectPaths = new List<string>(module.Sources.Length);
+            var settings = module.CxxSettings ?? CxxModuleSettings.Empty;
             if (module.Kind == ModuleKind.HeaderOnly)
             {
                 finalActions[module.Id] = [];
                 return;
             }
 
+            var pchSource = settings.PrecompiledSource;
+            var pchHeader = settings.PrecompiledHeader;
+            if (pchSource is not null && !module.Sources.Contains(pchSource.Value))
+                throw new InvalidOperationException(
+                    $"Module '{module.Id}' precompiled source '{pchSource}' is not part of its source set.");
+
+            var pchPath = pchSource is null
+                ? null
+                : BuildPathLayout.PrecompiledHeaderFile(graph.Configuration, graph.Target.Id, module.Id);
+            var pchActionId = pchSource is null
+                ? null
+                : ActionId(module.Id, $"compile-{BuildPathLayout.StableToken(pchSource.Value.Value)}");
+            var includeArguments = module.CompileUsage.IncludeDirectories
+                .Select(include => $"/I{include.Value}").ToImmutableArray();
+            var systemIncludeArguments = SystemIncludes(module)
+                .Select(include => $"/external:I{include.Value}").ToImmutableArray();
+            var defineArguments = module.CompileUsage.Defines
+                .Select(define => $"/D{define.Value}").ToImmutableArray();
+            var forcedIncludeArguments = settings.ForcedIncludes
+                .Select(include => $"/FI{include.Value}").ToImmutableArray();
+            var forcedIncludeInputs = settings.ForcedIncludes.Select(include => include.Value).ToImmutableArray();
+            var commonArgumentCount = 2 + policy.CompileArguments.Length + settings.CompilerArguments.Length +
+                                      includeArguments.Length + systemIncludeArguments.Length +
+                                      defineArguments.Length + forcedIncludeArguments.Length;
+            var commonArgumentsBuilder = ImmutableArray.CreateBuilder<string>(commonArgumentCount);
+            commonArgumentsBuilder.Add("/nologo");
+            commonArgumentsBuilder.Add("/c");
+            commonArgumentsBuilder.AddRange(policy.CompileArguments);
+            commonArgumentsBuilder.AddRange(settings.CompilerArguments);
+            commonArgumentsBuilder.AddRange(includeArguments);
+            commonArgumentsBuilder.AddRange(systemIncludeArguments);
+            commonArgumentsBuilder.AddRange(defineArguments);
+            commonArgumentsBuilder.AddRange(forcedIncludeArguments);
+            var commonArguments = commonArgumentsBuilder.MoveToImmutable();
+            var pchCreateArguments = PchArguments("Yc");
+            var pchUseArguments = PchArguments("Yu");
+
+            var resourceArgumentsBuilder = ImmutableArray.CreateBuilder<string>();
+            resourceArgumentsBuilder.Add("/nologo");
+            resourceArgumentsBuilder.AddRange(policy.CompileArguments
+                .Where(argument => argument.StartsWith("/D", StringComparison.OrdinalIgnoreCase))
+                .Select(argument => $"/d{argument[2..]}"));
+            resourceArgumentsBuilder.AddRange(includeArguments);
+            resourceArgumentsBuilder.AddRange(module.CompileUsage.Defines.Select(define => $"/d{define.Value}"));
+            var commonResourceArguments = resourceArgumentsBuilder.ToImmutable();
+
             foreach (var source in module.Sources.Where(source => BuildFileKinds.IsCxxSource(source.Value)))
             {
                 var sourceToken = BuildPathLayout.StableToken(source.Value);
-                var objectPath = BuildPathLayout.ObjectFile(graph.Configuration, graph.Target.Id, module.Id, source);
+                var objectPath = BuildPathLayout.ObjectFile(
+                    graph.Configuration, graph.Target.Id, module.Id, source, sourceToken);
                 var actionId = ActionId(module.Id, $"compile-{sourceToken}");
-                var arguments = new List<string> { "/nologo", "/c", "/EHsc", "/std:c++latest" };
-                arguments.AddRange(policy.CompileArguments);
-                arguments.AddRange(module.CompileUsage.IncludeDirectories.Select(include => $"/I{include.Value}"));
-                arguments.AddRange(module.CompileUsage.Defines.Select(define => $"/D{define.Value}"));
-                arguments.Add(source.Value);
-                arguments.Add($"/Fo{objectPath}");
+                var createsPch = pchSource is not null && source == pchSource.Value;
+                var sharedArguments = pchPath is null || pchHeader is null
+                    ? commonArguments
+                    : createsPch
+                        ? pchCreateArguments
+                        : pchUseArguments;
+                var actionArguments = ImmutableArray.Create(source.Value, $"/Fo{objectPath}");
+                var inputs = new List<string>(1 + forcedIncludeInputs.Length + (pchHeader is null ? 0 : 1))
+                {
+                    source.Value
+                };
+                inputs.AddRange(forcedIncludeInputs);
+                if (pchHeader is not null) inputs.Add(pchHeader.Value.Value);
+                var compileOutputs = new List<string> { objectPath };
+                if (createsPch) compileOutputs.Add(pchPath!);
                 actions.Add(new BuildAction(
                     actionId,
                     BuildActionKind.Compile,
                     toolchain.Compiler,
-                    [.. arguments],
-                    new LogicalPath("."),
-                    [source.Value],
-                    [objectPath],
-                    [],
-                    ["INCLUDE", "TMP", "TEMP"],
+                    new ActionArgumentSequence(sharedArguments, actionArguments),
+                    WorkingDirectory,
+                    [.. inputs.Distinct(StringComparer.Ordinal)],
+                    [.. compileOutputs],
+                    createsPch || pchActionId is null ? [] : [pchActionId],
+                    CompileEnvironment,
                     false,
                     false,
                     []));
                 artifacts.Add(new BuildArtifact($"{module.Id}:object:{sourceToken}", ArtifactKind.ObjectFile,
                     new LogicalPath(objectPath), actionId));
+                if (createsPch)
+                    artifacts.Add(new BuildArtifact($"{module.Id}:pch", ArtifactKind.PrecompiledHeader,
+                        new LogicalPath(pchPath!), actionId));
                 objectActions.Add(actionId);
                 objectPaths.Add(objectPath);
             }
@@ -89,26 +151,19 @@ public static class ActionGraphLowerer
                                            $"Toolchain '{toolchain.Id}' cannot compile resource source '{source}'.");
                 var sourceToken = BuildPathLayout.StableToken(source.Value);
                 var resourcePath = BuildPathLayout.ResourceFile(
-                    graph.Configuration, graph.Target.Id, module.Id, source);
+                    graph.Configuration, graph.Target.Id, module.Id, source, sourceToken);
                 var actionId = ActionId(module.Id, $"resource-{sourceToken}");
-                var arguments = new List<string> { "/nologo" };
-                arguments.AddRange(policy.CompileArguments
-                    .Where(argument => argument.StartsWith("/D", StringComparison.OrdinalIgnoreCase))
-                    .Select(argument => $"/d{argument[2..]}"));
-                arguments.AddRange(module.CompileUsage.IncludeDirectories.Select(include => $"/I{include.Value}"));
-                arguments.AddRange(module.CompileUsage.Defines.Select(define => $"/d{define.Value}"));
-                arguments.Add($"/fo{resourcePath}");
-                arguments.Add(source.Value);
+                var actionArguments = ImmutableArray.Create($"/fo{resourcePath}", source.Value);
                 actions.Add(new BuildAction(
                     actionId,
                     BuildActionKind.ResourceCompile,
                     resourceCompiler,
-                    [.. arguments],
-                    new LogicalPath("."),
+                    new ActionArgumentSequence(commonResourceArguments, actionArguments),
+                    WorkingDirectory,
                     [source.Value],
                     [resourcePath],
                     [],
-                    ["INCLUDE", "TMP", "TEMP"],
+                    CompileEnvironment,
                     false,
                     false,
                     []));
@@ -129,11 +184,15 @@ public static class ActionGraphLowerer
                 .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToImmutableArray();
             if (module.Kind == ModuleKind.StaticLibrary)
             {
-                var libraryOutput = $"{outputRoot}/{module.Id}.lib";
+                var outputName = settings.OutputName ?? module.Id;
+                var libraryOutput = $"{outputRoot}/{outputName}.lib";
+                var objectInputs = objectPaths.ToImmutableArray();
                 actions.Add(new BuildAction(finalActionId, BuildActionKind.Archive, toolchain.Librarian,
-                    ["/nologo", $"/OUT:{libraryOutput}", .. objectPaths], new LogicalPath("."), [.. objectPaths],
+                    new ActionArgumentSequence(
+                        ["/nologo", .. settings.LibrarianArguments, $"/OUT:{libraryOutput}"], objectInputs),
+                    WorkingDirectory, objectInputs,
                     [libraryOutput],
-                    dependencies, ["LIB", "TMP", "TEMP"], true, false, []));
+                    dependencies, LibraryEnvironment, true, false, []));
                 artifacts.Add(new BuildArtifact($"{module.Id}:StaticLibrary", ArtifactKind.StaticLibrary,
                     new LogicalPath(libraryOutput), finalActionId));
                 finalActions[module.Id] = [finalActionId];
@@ -141,30 +200,32 @@ public static class ActionGraphLowerer
             }
 
             var extension = module.Kind == ModuleKind.SharedLibrary ? "dll" : "exe";
-            var output = $"{outputRoot}/{module.Id}.{extension}";
+            var binaryName = settings.OutputName ?? module.Id;
+            var output = $"{outputRoot}/{binaryName}.{extension}";
             var linkArguments = new List<string> { "/NOLOGO", $"/OUT:{output}" };
             var outputs = new List<string> { output };
             if (module.Kind == ModuleKind.SharedLibrary)
             {
-                var importLibrary = $"{outputRoot}/{module.Id}.lib";
+                var importLibrary = $"{outputRoot}/{binaryName}.lib";
                 linkArguments.Add("/DLL");
                 linkArguments.Add($"/IMPLIB:{importLibrary}");
                 outputs.Add(importLibrary);
             }
 
             linkArguments.AddRange(policy.LinkArguments);
-            linkArguments.AddRange(objectPaths);
-            linkArguments.AddRange(module.CompileUsage.LinkInputs.Select(input => input.Value));
+            linkArguments.AddRange(settings.LinkerArguments);
+            var linkInputs = objectPaths.Concat(module.CompileUsage.LinkInputs.Select(input => input.Value))
+                .ToImmutableArray();
             actions.Add(new BuildAction(finalActionId, BuildActionKind.Link, toolchain.Linker,
-                [.. linkArguments], new LogicalPath("."),
-                [.. objectPaths, .. module.CompileUsage.LinkInputs.Select(input => input.Value)],
-                [.. outputs], dependencies, ["LIB", "TMP", "TEMP"], true, false, []));
+                new ActionArgumentSequence([.. linkArguments], linkInputs), WorkingDirectory,
+                linkInputs,
+                [.. outputs], dependencies, LibraryEnvironment, true, false, []));
             artifacts.Add(new BuildArtifact($"{module.Id}:{extension}",
                 module.Kind == ModuleKind.SharedLibrary ? ArtifactKind.SharedLibrary : ArtifactKind.Executable,
                 new LogicalPath(output), finalActionId));
             if (module.Kind == ModuleKind.SharedLibrary)
                 artifacts.Add(new BuildArtifact($"{module.Id}:ImportLibrary", ArtifactKind.ImportLibrary,
-                    new LogicalPath($"{outputRoot}/{module.Id}.lib"), finalActionId));
+                    new LogicalPath($"{outputRoot}/{binaryName}.lib"), finalActionId));
 
             var copyActions = new List<string>();
             if (module.Kind == ModuleKind.Executable)
@@ -177,7 +238,7 @@ public static class ActionGraphLowerer
 
                     var copyId = CopyActionId(module.Id, runtime.Value);
                     actions.Add(new BuildAction(copyId, BuildActionKind.Copy, "copy",
-                        ["/Y", runtime.Value, destination], new LogicalPath("."), [runtime.Value], [destination],
+                        ["/Y", runtime.Value, destination], WorkingDirectory, [runtime.Value], [destination],
                         [finalActionId], [], true, false, []));
                     artifacts.Add(new BuildArtifact(
                         $"{module.Id}:runtime:{Path.GetFileName(runtime.Value)}:{BuildPathLayout.StableToken(runtime.Value, 8)}",
@@ -189,66 +250,27 @@ public static class ActionGraphLowerer
             finalActions[module.Id] = copyActions.Count == 0
                 ? [finalActionId]
                 : [.. copyActions.Order(StringComparer.Ordinal)];
+
+            ImmutableArray<string> PchArguments(string mode)
+            {
+                if (pchPath is null || pchHeader is null) return commonArguments;
+
+                return [.. commonArguments, $"/{mode}{pchHeader.Value.Value}", $"/Fp{pchPath}"];
+            }
+        }
+
+        static ImmutableArray<UsageValue> SystemIncludes(ConfiguredModule module)
+        {
+            return module.CompileUsage.SystemIncludeDirectories.IsDefault
+                ? []
+                : module.CompileUsage.SystemIncludeDirectories;
         }
 
         void LowerCSharp(ConfiguredModule module)
         {
-            var moduleName = module.DisplayName.EndsWith("Module", StringComparison.Ordinal)
-                ? module.DisplayName[..^"Module".Length]
-                : module.DisplayName;
-            var targetName = graph.Target.DisplayName.EndsWith("Target", StringComparison.Ordinal)
-                ? graph.Target.DisplayName[..^"Target".Length]
-                : graph.Target.DisplayName;
-            var projectName = moduleName.Equals(targetName, StringComparison.Ordinal) ||
-                              moduleName.Equals(targetName + "Executable", StringComparison.Ordinal)
-                ? targetName
-                : $"{moduleName}.{targetName}";
-            var project = $".roxy/generated/Vs2022/{workspaceName}/{projectName}.csproj";
-            var restoreId = ActionId(module.Id, "DotnetRestore");
-            var buildId = ActionId(module.Id, "DotnetBuild");
-            var dependencies = DependencyActions(module);
-            var restoreOutput =
-                $"intermediate/msbuild/{projectName}/{configurationName}/packages.lock.json";
-            actions.Add(new BuildAction(restoreId, BuildActionKind.DotNetRestore, "dotnet",
-                [
-                    "restore", project, "--use-lock-file",
-                    $"-p:Configuration={configurationName}", $"-p:Platform={msbuildPlatform}"
-                ],
-                new LogicalPath("."), [project], [restoreOutput], [],
-                ["NUGET_PACKAGES", "NUGET_HTTP_CACHE_PATH", "TMP", "TEMP"], false, false, []));
-            var frameworks = module.TargetFrameworks.DefaultIfEmpty("net10.0")
-                .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToImmutableArray();
-            var assemblies = frameworks.Select(framework =>
-                $"{outputRoot}/{module.Id}/{framework}/{module.Id}.dll").ToImmutableArray();
-            actions.Add(new BuildAction(buildId, BuildActionKind.DotNetBuild, "dotnet",
-                [
-                    "build", project, "--no-restore", "--configuration", configurationName,
-                    $"-p:Platform={msbuildPlatform}", $"-p:RoxyConfigurationHash={graph.Configuration.ShortHash}"
-                ],
-                new LogicalPath("."), [project, .. module.Sources.Select(source => source.Value)], assemblies,
-                [restoreId, .. dependencies], ["DOTNET_ROOT", "NUGET_PACKAGES", "TMP", "TEMP"], false, false, []));
-            foreach (var (framework, assembly) in frameworks.Zip(assemblies))
-                artifacts.Add(new BuildArtifact($"{module.Id}:ManagedAssembly:{framework}",
-                    ArtifactKind.ManagedAssembly, new LogicalPath(assembly), buildId));
-
-            var copyActions = new List<string>();
-            foreach (var runtime in module.CompileUsage.RuntimeFiles.OrderBy(value => value.Value,
-                         StringComparer.Ordinal))
-            {
-                var copyId = CopyActionId(module.Id, runtime.Value);
-                var destination = $"{outputRoot}/{module.Id}/{Path.GetFileName(runtime.Value)}";
-                actions.Add(new BuildAction(copyId, BuildActionKind.Copy, "copy",
-                    ["/Y", runtime.Value, destination], new LogicalPath("."), [runtime.Value], [destination],
-                    [buildId], [], true, false, []));
-                artifacts.Add(new BuildArtifact(
-                    $"{module.Id}:runtime:{Path.GetFileName(runtime.Value)}:{BuildPathLayout.StableToken(runtime.Value, 8)}",
-                    ArtifactKind.RuntimeFile, new LogicalPath(destination), copyId));
-                copyActions.Add(copyId);
-            }
-
-            finalActions[module.Id] = copyActions.Count == 0
-                ? [buildId]
-                : [.. copyActions.Order(StringComparer.Ordinal)];
+            // Managed projects are lowered by their selected project-system backend. Keeping generated
+            // project paths out of the core action graph prevents the graph from depending on Vs2022.
+            finalActions[module.Id] = [];
         }
 
         ImmutableArray<string> DependencyActions(ConfiguredModule module)

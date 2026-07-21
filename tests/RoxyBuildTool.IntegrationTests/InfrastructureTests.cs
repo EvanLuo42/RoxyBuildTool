@@ -99,6 +99,31 @@ public sealed class InfrastructureTests
     }
 
     [Fact]
+    public async Task ModuleDefinitionsAreCachedByRelevantConfigurationFragments()
+    {
+        CacheProbeModule.Reset();
+        var workspaceRoot = Path.Combine(Path.GetTempPath(), $"RoxyCacheProbe-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(workspaceRoot);
+        try
+        {
+            var exitCode = await BuildToolApp.Create(["generate", "CacheProbe", "--workspace", "Vs2022"])
+                .WithWorkspaceRoot(workspaceRoot)
+                .WithOutput(TextWriter.Null)
+                .AddRules<CacheProbeRules>()
+                .UseWindowsPlatform()
+                .UseVisualStudio()
+                .RunAsync(TestContext.Current.CancellationToken);
+
+            Assert.Equal(0, exitCode);
+            Assert.Equal(2, CacheProbeModule.ConfigureCount);
+        }
+        finally
+        {
+            Directory.Delete(workspaceRoot, true);
+        }
+    }
+
+    [Fact]
     public async Task UnregisteredRuleReferencesHaveAStableDefinitionDiagnostic()
     {
         using var error = new StringWriter();
@@ -111,6 +136,21 @@ public sealed class InfrastructureTests
         Assert.Equal(2, exitCode);
         Assert.Contains("RBT2102", error.ToString(), StringComparison.Ordinal);
         Assert.Contains("Unregistered", error.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task InvalidNativeSettingsHaveAStableDefinitionDiagnostic()
+    {
+        using var error = new StringWriter();
+
+        var exitCode = await BuildToolApp.Create([])
+            .WithOutput(TextWriter.Null, error)
+            .AddRules<InvalidNativeSettingsRules>()
+            .RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, exitCode);
+        Assert.Contains("RBT2103", error.ToString(), StringComparison.Ordinal);
+        Assert.Contains("must either both be set", error.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -239,10 +279,85 @@ public sealed class UnsupportedLinkRules : IRulesModule
     }
 }
 
+public sealed class CacheProbeRules : IRulesModule
+{
+    public void Register(BuildRegistry registry)
+    {
+        registry.AddModule<CacheProbeModule>();
+        registry.AddTarget<CacheProbeTarget>();
+        registry.AddWorkspace<CacheProbeWorkspace>();
+    }
+}
+
+[BuildRuleIgnore]
+public sealed class CacheProbeModule : CxxModule
+{
+    private static int configureCount;
+    public static int ConfigureCount => Volatile.Read(ref configureCount);
+
+    public static void Reset()
+    {
+        Volatile.Write(ref configureCount, 0);
+    }
+
+    [Configure]
+    private static void Configure(ModuleRules rules)
+    {
+        Interlocked.Increment(ref configureCount);
+        rules.Output = CxxOutput.HeaderOnly;
+    }
+}
+
+[BuildRuleIgnore]
+public sealed class CacheProbeTarget : BuildTarget
+{
+    [Configure]
+    private static void Configure(TargetRules rules)
+    {
+        rules.RootModules.Add<CacheProbeModule>();
+        rules.Matrix
+            .Axis(Configuration.Platforms.Windows)
+            .Axis(Architectures.X64)
+            .Axis(BuildProfiles.All.ToArray())
+            .Axis(Configuration.Toolchains.Msvc)
+            .Axis(LinkModels.Modular);
+    }
+}
+
+[BuildRuleIgnore]
+public sealed class CacheProbeWorkspace : BuildWorkspace
+{
+    [Configure]
+    private static void Configure(WorkspaceRules rules)
+    {
+        rules.Targets.Add<CacheProbeTarget>();
+        rules.StartupTarget<CacheProbeTarget>();
+        rules.IncludeBuildHost = false;
+    }
+}
+
 public sealed class MissingReferenceRules : IRulesModule
 {
     public void Register(BuildRegistry registry) =>
         registry.AddModule<MissingReferenceModule>();
+}
+
+public sealed class InvalidNativeSettingsRules : IRulesModule
+{
+    public void Register(BuildRegistry registry)
+    {
+        registry.AddModule<InvalidNativeSettingsModule>();
+    }
+}
+
+[BuildRuleIgnore]
+public sealed class InvalidNativeSettingsModule : CxxModule
+{
+    [Configure]
+    private static void Configure(ModuleRules rules)
+    {
+        rules.Cxx.PrecompiledHeader = "include/pch.h";
+    }
 }
 
 [BuildRuleIgnore]

@@ -12,6 +12,8 @@ public enum CommandKind
     QueryMatrix,
     QueryGraph,
     Explain,
+    Help,
+    Version
 }
 
 /// <summary>Contains a parsed command, subject, selectors, and output options.</summary>
@@ -39,6 +41,8 @@ public static class CommandLineParser
         var command = args[index++].ToLowerInvariant();
         var kind = command switch
         {
+            "help" or "--help" or "-h" => CommandKind.Help,
+            "version" or "--version" => CommandKind.Version,
             "generate" => CommandKind.Generate,
             "build" => CommandKind.Build,
             "explain" => CommandKind.Explain,

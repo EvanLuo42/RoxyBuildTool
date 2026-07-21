@@ -1,6 +1,8 @@
+using System.Collections;
 using System.Collections.Immutable;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using RoxyBuildTool.Abstractions;
 
@@ -183,8 +185,19 @@ public static class BuildPathLayout
         string module,
         LogicalPath source)
     {
+        return ObjectFile(configuration, target, module, source, StableToken(source.Value));
+    }
+
+    /// <summary>Builds an object path using a stable token already computed for <paramref name="source" />.</summary>
+    public static string ObjectFile(
+        ConfigurationKey configuration,
+        string target,
+        string module,
+        LogicalPath source,
+        string sourceToken)
+    {
         return $"{IntermediateRoot(configuration, target)}/{module}/{SanitizedStem(source)}-" +
-               $"{StableToken(source.Value)}.obj";
+               $"{sourceToken}.obj";
     }
 
     public static string ResourceFile(
@@ -193,15 +206,46 @@ public static class BuildPathLayout
         string module,
         LogicalPath source)
     {
+        return ResourceFile(configuration, target, module, source, StableToken(source.Value));
+    }
+
+    /// <summary>Builds a resource path using a stable token already computed for <paramref name="source" />.</summary>
+    public static string ResourceFile(
+        ConfigurationKey configuration,
+        string target,
+        string module,
+        LogicalPath source,
+        string sourceToken)
+    {
         return $"{IntermediateRoot(configuration, target)}/{module}/{SanitizedStem(source)}-" +
-               $"{StableToken(source.Value)}.res";
+               $"{sourceToken}.res";
+    }
+
+    public static string PrecompiledHeaderFile(
+        ConfigurationKey configuration,
+        string target,
+        string module)
+    {
+        return $"{IntermediateRoot(configuration, target)}/{module}/{module}.pch";
     }
 
     public static string StableToken(string value, int length = 12)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(length);
-        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
-        return length <= hash.Length ? hash[..length] : throw new ArgumentOutOfRangeException(nameof(length));
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(length, SHA256.HashSizeInBytes * 2);
+
+        var byteCount = Encoding.UTF8.GetByteCount(value);
+        var encoded = byteCount <= 256 ? stackalloc byte[byteCount] : new byte[byteCount];
+        Encoding.UTF8.GetBytes(value, encoded);
+
+        Span<byte> hash = stackalloc byte[SHA256.HashSizeInBytes];
+        SHA256.HashData(encoded, hash);
+        var hashedBytes = (length + 1) / 2;
+        Span<char> token = stackalloc char[hashedBytes * 2];
+        Convert.TryToHexString(hash[..hashedBytes], token, out _);
+        foreach (ref var character in token)
+            character = char.ToLowerInvariant(character);
+        return new string(token[..length]);
     }
 
     private static string Fragment(ConfigurationKey configuration, string fragment)
@@ -212,9 +256,17 @@ public static class BuildPathLayout
     private static string SanitizedStem(LogicalPath source)
     {
         var stem = Path.GetFileNameWithoutExtension(source.Value);
-        var sanitized = new string(stem.Where(character => char.IsAsciiLetterOrDigit(character) || character == '_')
-            .ToArray());
-        return sanitized.Length == 0 ? "source" : sanitized;
+        var validCharacters = stem.Count(character => char.IsAsciiLetterOrDigit(character) || character == '_');
+        if (validCharacters == 0) return "source";
+        if (validCharacters == stem.Length) return stem;
+
+        return string.Create(validCharacters, stem, static (destination, value) =>
+        {
+            var index = 0;
+            foreach (var character in value)
+                if (char.IsAsciiLetterOrDigit(character) || character == '_')
+                    destination[index++] = character;
+        });
     }
 }
 
@@ -272,25 +324,38 @@ public readonly record struct LogicalPath
 /// <summary>Classifies source files consistently across action and workspace generators.</summary>
 public static class BuildFileKinds
 {
-    private static readonly ImmutableHashSet<string> CxxSourceExtensions =
-        ImmutableHashSet.Create(StringComparer.OrdinalIgnoreCase, ".c", ".cc", ".cpp", ".cxx", ".m", ".mm");
-
-    private static readonly ImmutableHashSet<string> HeaderExtensions =
-        ImmutableHashSet.Create(StringComparer.OrdinalIgnoreCase, ".h", ".hh", ".hpp", ".hxx", ".inl", ".inc");
-
     public static bool IsCxxSource(string path)
     {
-        return CxxSourceExtensions.Contains(Path.GetExtension(path));
+        var extension = Path.GetExtension(path.AsSpan());
+        return extension.Equals(".c", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".cc", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".cpp", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".cxx", StringComparison.OrdinalIgnoreCase);
     }
 
     public static bool IsHeader(string path)
     {
-        return HeaderExtensions.Contains(Path.GetExtension(path));
+        var extension = Path.GetExtension(path.AsSpan());
+        return extension.Equals(".h", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".hh", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".hpp", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".hxx", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".inl", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".inc", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>Returns true for intentionally unsupported MASM/NASM/GAS-style source extensions.</summary>
+    public static bool IsAssemblySource(string path)
+    {
+        var extension = Path.GetExtension(path.AsSpan());
+        return extension.Equals(".asm", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".s", StringComparison.OrdinalIgnoreCase) ||
+               extension.Equals(".nasm", StringComparison.OrdinalIgnoreCase);
     }
 
     public static bool IsResource(string path)
     {
-        return Path.GetExtension(path).Equals(".rc", StringComparison.OrdinalIgnoreCase);
+        return Path.GetExtension(path.AsSpan()).Equals(".rc", StringComparison.OrdinalIgnoreCase);
     }
 }
 
@@ -332,21 +397,28 @@ public sealed record PackageReferenceModel(string Id, string Version, bool Priva
 /// <summary>Associates a propagated usage value with the definition that introduced it.</summary>
 public sealed record UsageValue(string Value, string Origin);
 
-/// <summary>Contains include, define, link, and runtime requirements with origin tracking.</summary>
+/// <summary>Contains ordinary/system includes, defines, link inputs, and runtime requirements with origin tracking.</summary>
 public sealed record UsageRequirements(
     ImmutableArray<UsageValue> IncludeDirectories,
     ImmutableArray<UsageValue> Defines,
     ImmutableArray<UsageValue> LinkInputs,
-    ImmutableArray<UsageValue> RuntimeFiles)
+    ImmutableArray<UsageValue> RuntimeFiles,
+    ImmutableArray<UsageValue> SystemIncludeDirectories = default)
 {
-    public static UsageRequirements Empty { get; } = new([], [], [], []);
+    public static UsageRequirements Empty { get; } = new([], [], [], [], []);
 
     /// <summary>Combines requirements by value using deterministic origin selection.</summary>
     public UsageRequirements Union(UsageRequirements other) => new(
         Normalize(IncludeDirectories.AddRange(other.IncludeDirectories)),
         Normalize(Defines.AddRange(other.Defines)),
         Normalize(LinkInputs.AddRange(other.LinkInputs)),
-        Normalize(RuntimeFiles.AddRange(other.RuntimeFiles)));
+        Normalize(Values(RuntimeFiles).AddRange(Values(other.RuntimeFiles))),
+        Normalize(Values(SystemIncludeDirectories).AddRange(Values(other.SystemIncludeDirectories))));
+
+    private static ImmutableArray<UsageValue> Values(ImmutableArray<UsageValue> values)
+    {
+        return values.IsDefault ? [] : values;
+    }
 
     private static ImmutableArray<UsageValue> Normalize(IEnumerable<UsageValue> values) => values
         .GroupBy(value => value.Value, StringComparer.Ordinal)
@@ -354,6 +426,19 @@ public sealed record UsageRequirements(
         .OrderBy(value => value.Value, StringComparer.Ordinal)
         .ThenBy(value => value.Origin, StringComparer.Ordinal)
         .ToImmutableArray();
+}
+
+/// <summary>Contains native settings that are not dependency usage requirements.</summary>
+public sealed record CxxModuleSettings(
+    ImmutableArray<string> CompilerArguments,
+    ImmutableArray<string> LinkerArguments,
+    ImmutableArray<string> LibrarianArguments,
+    ImmutableArray<LogicalPath> ForcedIncludes,
+    LogicalPath? PrecompiledHeader = null,
+    LogicalPath? PrecompiledSource = null,
+    string? OutputName = null)
+{
+    public static CxxModuleSettings Empty { get; } = new([], [], [], []);
 }
 
 /// <summary>Represents one enabled module after configuration and dependency propagation.</summary>
@@ -370,7 +455,8 @@ public sealed record ConfiguredModule(
     ImmutableArray<DependencyEdge> Dependencies,
     ImmutableArray<string> TargetFrameworks,
     ImmutableArray<PackageReferenceModel> Packages,
-    string? RootNamespace = null);
+    string? RootNamespace = null,
+    CxxModuleSettings? CxxSettings = null);
 
 /// <summary>Identifies the target and root modules of a configured graph.</summary>
 public sealed record ConfiguredTarget(
@@ -401,6 +487,7 @@ public enum ArtifactKind
     GeneratedProject,
     ManagedAssembly,
     RuntimeFile,
+    PrecompiledHeader
 }
 
 /// <summary>Describes a typed artifact and the action that produces it.</summary>
@@ -418,21 +505,171 @@ public enum BuildActionKind
     DotNetBuild,
 }
 
-/// <summary>Describes one structured, dependency-ordered build operation.</summary>
-public sealed record BuildAction(
-    string Id,
-    BuildActionKind Kind,
-    string Command,
-    ImmutableArray<string> Arguments,
-    LogicalPath WorkingDirectory,
-    ImmutableArray<string> Inputs,
-    ImmutableArray<string> Outputs,
-    ImmutableArray<string> Dependencies,
-    ImmutableArray<string> EnvironmentWhitelist,
-    bool Cacheable,
-    bool RemoteExecutable,
-    ImmutableArray<string> SensitiveArguments)
+/// <summary>Provides allocation-free traversal over shared and action-specific argument segments.</summary>
+public readonly struct ActionArgumentSequence : IReadOnlyList<string>
 {
+    private readonly ImmutableArray<string> _prefix;
+    private readonly ImmutableArray<string> _suffix;
+
+    public ActionArgumentSequence(ImmutableArray<string> arguments) : this(arguments, [])
+    {
+    }
+
+    public ActionArgumentSequence(ImmutableArray<string> prefix, ImmutableArray<string> suffix)
+    {
+        _prefix = prefix.IsDefault ? [] : prefix;
+        _suffix = suffix.IsDefault ? [] : suffix;
+    }
+
+    public int Count => _prefix.Length + _suffix.Length;
+
+    /// <summary>Gets the segment shared by actions with identical compiler or linker settings.</summary>
+    public ImmutableArray<string> SharedPrefix => _prefix;
+
+    /// <summary>Gets the segment containing action-specific source, output, or input arguments.</summary>
+    public ImmutableArray<string> SpecificSuffix => _suffix;
+
+    public string this[int index] => index < _prefix.Length
+        ? _prefix[index]
+        : _suffix[index - _prefix.Length];
+
+    public Enumerator GetEnumerator()
+    {
+        return new Enumerator(_prefix, _suffix);
+    }
+
+    IEnumerator<string> IEnumerable<string>.GetEnumerator()
+    {
+        return GetEnumerator();
+    }
+
+    IEnumerator IEnumerable.GetEnumerator()
+    {
+        return GetEnumerator();
+    }
+
+    public ImmutableArray<string> ToImmutableArray()
+    {
+        if (_suffix.IsEmpty) return _prefix;
+        if (_prefix.IsEmpty) return _suffix;
+
+        var builder = ImmutableArray.CreateBuilder<string>(Count);
+        builder.AddRange(_prefix);
+        builder.AddRange(_suffix);
+        return builder.MoveToImmutable();
+    }
+
+    public struct Enumerator : IEnumerator<string>
+    {
+        private readonly ImmutableArray<string> _prefix;
+        private readonly ImmutableArray<string> _suffix;
+        private int _index;
+
+        internal Enumerator(ImmutableArray<string> prefix, ImmutableArray<string> suffix)
+        {
+            _prefix = prefix;
+            _suffix = suffix;
+            _index = -1;
+        }
+
+        public string Current => _index < _prefix.Length
+            ? _prefix[_index]
+            : _suffix[_index - _prefix.Length];
+
+        object IEnumerator.Current => Current;
+
+        public bool MoveNext()
+        {
+            return ++_index < _prefix.Length + _suffix.Length;
+        }
+
+        public void Reset()
+        {
+            _index = -1;
+        }
+
+        public void Dispose()
+        {
+        }
+    }
+}
+
+/// <summary>Describes one structured, dependency-ordered build operation.</summary>
+public sealed record BuildAction
+{
+    private readonly ActionArgumentSequence _argumentValues;
+
+    [JsonConstructor]
+    public BuildAction(
+        string id,
+        BuildActionKind kind,
+        string command,
+        ImmutableArray<string> arguments,
+        LogicalPath workingDirectory,
+        ImmutableArray<string> inputs,
+        ImmutableArray<string> outputs,
+        ImmutableArray<string> dependencies,
+        ImmutableArray<string> environmentWhitelist,
+        bool cacheable,
+        bool remoteExecutable,
+        ImmutableArray<string> sensitiveArguments)
+        : this(id, kind, command, new ActionArgumentSequence(arguments), workingDirectory, inputs, outputs,
+            dependencies, environmentWhitelist, cacheable, remoteExecutable, sensitiveArguments)
+    {
+    }
+
+    public BuildAction(
+        string id,
+        BuildActionKind kind,
+        string command,
+        ActionArgumentSequence arguments,
+        LogicalPath workingDirectory,
+        ImmutableArray<string> inputs,
+        ImmutableArray<string> outputs,
+        ImmutableArray<string> dependencies,
+        ImmutableArray<string> environmentWhitelist,
+        bool cacheable,
+        bool remoteExecutable,
+        ImmutableArray<string> sensitiveArguments)
+    {
+        Id = id;
+        Kind = kind;
+        Command = command;
+        _argumentValues = arguments;
+        WorkingDirectory = workingDirectory;
+        Inputs = inputs;
+        Outputs = outputs;
+        Dependencies = dependencies;
+        EnvironmentWhitelist = environmentWhitelist;
+        Cacheable = cacheable;
+        RemoteExecutable = remoteExecutable;
+        SensitiveArguments = sensitiveArguments;
+    }
+
+    public string Id { get; init; }
+    public BuildActionKind Kind { get; init; }
+    public string Command { get; init; }
+
+    /// <summary>Gets a contiguous snapshot of the complete command-line argument list.</summary>
+    public ImmutableArray<string> Arguments
+    {
+        get => _argumentValues.ToImmutableArray();
+        init => _argumentValues = new ActionArgumentSequence(value);
+    }
+
+    /// <summary>Gets the shared, allocation-free argument view used by generators and executors.</summary>
+    [JsonIgnore]
+    public ActionArgumentSequence ArgumentValues => _argumentValues;
+
+    public LogicalPath WorkingDirectory { get; init; }
+    public ImmutableArray<string> Inputs { get; init; }
+    public ImmutableArray<string> Outputs { get; init; }
+    public ImmutableArray<string> Dependencies { get; init; }
+    public ImmutableArray<string> EnvironmentWhitelist { get; init; }
+    public bool Cacheable { get; init; }
+    public bool RemoteExecutable { get; init; }
+    public ImmutableArray<string> SensitiveArguments { get; init; }
+
     /// <summary>Gets the SHA-256 hash of fields that determine action semantics.</summary>
     public string SemanticHash
     {
@@ -442,7 +679,7 @@ public sealed record BuildAction(
                 Id,
                 Kind.ToString(),
                 Command,
-                string.Join('\0', Arguments),
+                string.Join('\0', ArgumentValues),
                 WorkingDirectory.Value,
                 string.Join('\0', Inputs),
                 string.Join('\0', Outputs),

@@ -25,7 +25,8 @@ public sealed record ModuleDefinition(
     ImmutableArray<PackageReferenceModel> Packages,
     ImmutableArray<ConditionalModuleRule> ConditionalRules,
     string? RootNamespace = null,
-    Func<ConfigurationKey, ModuleDefinition>? ConfigureForConfiguration = null);
+    Func<ConfigurationKey, ModuleDefinition>? ConfigureForConfiguration = null,
+    CxxModuleSettings? CxxSettings = null);
 
 /// <summary>Contains root modules and the configuration matrix of a target.</summary>
 public sealed record TargetDefinition(
@@ -49,6 +50,9 @@ public sealed record DefinitionGraph(
     ImmutableArray<TargetDefinition> Targets,
     ImmutableArray<WorkspaceDefinition> Workspaces)
 {
+    /// <summary>Gets rule binaries that participate in cross-invocation cache invalidation.</summary>
+    public ImmutableArray<string> RuleAssemblyIdentities { get; init; }
+
     /// <summary>Gets a module by stable ID.</summary>
     public ModuleDefinition GetModule(string id) => Modules.Single(module => module.Id == id);
 

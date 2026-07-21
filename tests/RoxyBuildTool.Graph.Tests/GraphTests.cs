@@ -1,7 +1,6 @@
 using System.Collections.Immutable;
 using RoxyBuildTool.Abstractions;
 using RoxyBuildTool.Configuration;
-using RoxyBuildTool.Graph;
 using RoxyBuildTool.Model;
 using RoxyBuildTool.Toolchains;
 using Xunit;
@@ -15,16 +14,19 @@ public sealed class GraphTests
     {
         var definitions = new DefinitionGraph([
             Module("a", ModuleKind.HeaderOnly, publicIncludes: ["A/Public"]),
-            Module("b", ModuleKind.StaticLibrary, publicIncludes: ["B/Public"], dependencies: [new("a", DependencyVisibility.Private)]),
+            Module("b", ModuleKind.StaticLibrary, publicIncludes: ["B/Public"],
+                dependencies: [new DependencyEdge("a", DependencyVisibility.Private)]),
             Module("c", ModuleKind.Executable, dependencies: [new("b", DependencyVisibility.Public)]),
-            Module("d", ModuleKind.HeaderOnly, publicIncludes: ["D/Public"], dependencies: [new("a", DependencyVisibility.Interface)]),
+            Module("d", ModuleKind.HeaderOnly, publicIncludes: ["D/Public"],
+                dependencies: [new DependencyEdge("a", DependencyVisibility.Interface)]),
             Module("e", ModuleKind.Executable, dependencies: [new("d", DependencyVisibility.Public)]),
         ], [Target("app", ["c", "e"])], []);
 
         var graph = DependencyResolver.Resolve(definitions, definitions.Targets[0], TestConfiguration());
 
         Assert.Contains(graph.GetModule("b").CompileUsage.IncludeDirectories, value => value.Value == "A/Public");
-        Assert.DoesNotContain(graph.GetModule("b").ConsumerUsage.IncludeDirectories, value => value.Value == "A/Public");
+        Assert.DoesNotContain(graph.GetModule("b").ConsumerUsage.IncludeDirectories,
+            value => value.Value == "A/Public");
         Assert.Contains(graph.GetModule("c").CompileUsage.IncludeDirectories, value => value.Value == "B/Public");
         Assert.DoesNotContain(graph.GetModule("c").CompileUsage.IncludeDirectories, value => value.Value == "A/Public");
         Assert.DoesNotContain(graph.GetModule("d").CompileUsage.IncludeDirectories, value => value.Value == "A/Public");
@@ -32,11 +34,12 @@ public sealed class GraphTests
     }
 
     [Fact]
-    public void LoweringProducesTypedNativeManagedAndStagingActions()
+    public void LoweringProducesNativeActionsWithoutLeakingProjectSystemDetails()
     {
         var definitions = new DefinitionGraph([
             Module("runtime", ModuleKind.SharedLibrary, sources: ["src/runtime.cpp"]),
-            Module("NativeApp", ModuleKind.Executable, sources: ["src/main.cpp"], dependencies: [new("runtime", DependencyVisibility.Private)]),
+            Module("NativeApp", ModuleKind.Executable, sources: ["src/main.cpp"],
+                dependencies: [new DependencyEdge("runtime", DependencyVisibility.Private)]),
             Module("ManagedApp", ModuleKind.CSharpConsoleApplication, ModuleLanguage.CSharp,
                 sources: ["managed/Program.cs"], dependencies: [new("runtime", DependencyVisibility.Runtime)]),
         ], [Target("mixed", ["NativeApp", "ManagedApp"])], []);
@@ -46,12 +49,11 @@ public sealed class GraphTests
 
         Assert.Contains(actions.Actions, action => action.Kind == BuildActionKind.Compile);
         Assert.Contains(actions.Actions, action => action.Kind == BuildActionKind.Link);
-        Assert.Contains(actions.Actions, action => action.Kind == BuildActionKind.DotNetRestore);
-        Assert.Contains(actions.Actions, action => action.Kind == BuildActionKind.DotNetBuild);
-        Assert.Contains(actions.Actions, action => action.Kind == BuildActionKind.Copy && action.Id.Contains("ManagedApp", StringComparison.Ordinal));
+        Assert.DoesNotContain(actions.Actions,
+            action => action.Kind is BuildActionKind.DotNetRestore or BuildActionKind.DotNetBuild);
+        Assert.DoesNotContain(actions.Actions.SelectMany(action => action.Arguments),
+            argument => argument.Contains(".roxy/generated/Vs2022", StringComparison.Ordinal));
         Assert.Empty(actions.Validate());
-        Assert.All(actions.Actions.Where(action => action.Kind is BuildActionKind.DotNetBuild or BuildActionKind.DotNetRestore),
-            action => Assert.False(action.RemoteExecutable));
     }
 
     [Fact]
@@ -75,17 +77,19 @@ public sealed class GraphTests
         string[]? sources = null,
         string[]? publicIncludes = null,
         DependencyEdge[]? dependencies = null) => new(
-            id,
-            id,
-            language,
-            kind,
-            (sources ?? []).Select(source => new LogicalPath(source)).ToImmutableArray(),
-            new((publicIncludes ?? []).Select(value => new UsageValue(value, $"{id}:public")).ToImmutableArray(), [], [], []),
-            UsageRequirements.Empty,
-            (dependencies ?? []).ToImmutableArray(),
-            language == ModuleLanguage.CSharp ? ["net10.0"] : [],
-            [],
-            []);
+        id,
+        id,
+        language,
+        kind,
+        (sources ?? []).Select(source => new LogicalPath(source)).ToImmutableArray(),
+        new UsageRequirements(
+            (publicIncludes ?? []).Select(value => new UsageValue(value, $"{id}:public")).ToImmutableArray(), [], [],
+            []),
+        UsageRequirements.Empty,
+        (dependencies ?? []).ToImmutableArray(),
+        language == ModuleLanguage.CSharp ? ["net10.0"] : [],
+        [],
+        []);
 
     private static TargetDefinition Target(string id, string[] roots) => new(
         id,
@@ -94,10 +98,10 @@ public sealed class GraphTests
         new MatrixBuilder().Build());
 
     private static ConfigurationKey TestConfiguration() => new([
-        RoxyBuildTool.Configuration.Platforms.Windows,
+        Configuration.Platforms.Windows,
         Architectures.X64,
         BuildProfiles.Development,
-        RoxyBuildTool.Configuration.Toolchains.Msvc,
+        Configuration.Toolchains.Msvc,
         LinkModels.Modular,
     ]);
 

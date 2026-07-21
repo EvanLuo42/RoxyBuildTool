@@ -175,6 +175,67 @@ public sealed class DependencyResolverBoundaryTests
     }
 
     [Fact]
+    public void CrossLanguageCompileUsageIsRejectedWhileRuntimeAndBuildOrderEdgesRemainValid()
+    {
+        var nativeUsage = new UsageRequirements(
+            [new UsageValue("native/include", "native")], [], [new UsageValue("native.lib", "native")],
+            [new UsageValue("native.dll", "native")]);
+        var definitions = new DefinitionGraph([
+            Module("native", ModuleKind.SharedLibrary, publicUsage: nativeUsage),
+            Module("managed", ModuleKind.CSharpConsoleApplication, ModuleLanguage.CSharp,
+                dependencies:
+                [
+                    new DependencyEdge("native", DependencyVisibility.Public),
+                    new DependencyEdge("runtime", DependencyVisibility.Runtime),
+                    new DependencyEdge("ordered", DependencyVisibility.BuildOrderOnly)
+                ]),
+            Module("runtime", ModuleKind.SharedLibrary, publicUsage: nativeUsage),
+            Module("ordered", ModuleKind.StaticLibrary)
+        ], [Target("target", ["managed"])], []);
+
+        var graph = DependencyResolver.Resolve(definitions, definitions.Targets[0], Configuration());
+        var managed = graph.GetModule("managed");
+
+        Assert.Single(graph.Diagnostics, diagnostic => diagnostic.Code == "RBT2004");
+        Assert.Empty(managed.CompileUsage.IncludeDirectories);
+        Assert.Empty(managed.CompileUsage.LinkInputs);
+        Assert.Contains(managed.CompileUsage.RuntimeFiles, item => item.Value == "native.dll");
+        Assert.Contains(managed.Dependencies, edge =>
+            edge.Module == "ordered" && edge.Visibility == DependencyVisibility.BuildOrderOnly);
+    }
+
+    [Fact]
+    public void AssemblyLanguageSourcesAreRejectedExplicitly()
+    {
+        var definitions = new DefinitionGraph([
+            Module("native", ModuleKind.StaticLibrary, sources: ["src/startup.asm", "src/vector.S"])
+        ], [Target("target", ["native"])], []);
+
+        var graph = DependencyResolver.Resolve(definitions, definitions.Targets[0], Configuration());
+
+        var diagnostic = Assert.Single(graph.Diagnostics, item => item.Code == "RBT2005");
+        Assert.Contains("startup.asm", diagnostic.Message, StringComparison.Ordinal);
+        Assert.Contains("vector.S", diagnostic.Message, StringComparison.Ordinal);
+        Assert.False(BuildFileKinds.IsCxxSource("source.mm"));
+        Assert.True(BuildFileKinds.IsAssemblySource("source.nasm"));
+    }
+
+    [Fact]
+    public void MissingPrecompiledSourceProducesAStableDiagnostic()
+    {
+        var native = Module("native", ModuleKind.StaticLibrary, sources: ["src/main.cpp"]) with
+        {
+            CxxSettings = new CxxModuleSettings([], [], [], [], new LogicalPath("include/pch.h"),
+                new LogicalPath("src/pch.cpp"))
+        };
+        var definitions = new DefinitionGraph([native], [Target("target", ["native"])], []);
+
+        var graph = DependencyResolver.Resolve(definitions, definitions.Targets[0], Configuration());
+
+        Assert.Single(graph.Diagnostics, item => item.Code == "RBT2006");
+    }
+
+    [Fact]
     public void ResolutionSortsRootsDependenciesAndSources()
     {
         var definitions = new DefinitionGraph([

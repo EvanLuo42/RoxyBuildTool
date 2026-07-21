@@ -8,16 +8,18 @@ RoxyBuildTool is a strongly typed, in-process build description system for C++ a
 
 - Ordinary C# build rules with IntelliSense, compile-time checking, and debugging.
 - C++ header-only, object, static library, shared library, and executable modules.
+- Native PCH, forced/system includes, output naming, and structured compiler/linker/librarian options.
 - C# class library and console application modules.
 - Typed configuration fragments, matrices, constraints, and canonical keys.
 - Explicit public, private, interface, build-order, and runtime dependency semantics.
 - Mixed C++/.NET Visual Studio solutions and compilation databases.
 - Deterministic output, compare-before-write generation, manifests, and semantic action hashes.
-- Platform and workspace generators registered as explicit plugins.
+- Bounded parallel configuration resolution and incremental generation/action graph caches.
+- Versioned plugins with declared capabilities and compatibility validation before registration.
 
 ## Supported environment
 
-The current implementation targets Windows x64, MSVC, .NET 10, and Visual Studio-compatible MSBuild. Linux, macOS, FASTBuild, packaging, deployment, and remote execution are design directions, not implemented features.
+The current implementation targets Windows x64, MSVC C/C++, .NET 10, and Visual Studio-compatible MSBuild. C++/CLI and assembly-language inputs (ASM/MASM/NASM/GAS) are intentionally unsupported. Linux, macOS, FASTBuild, packaging, deployment, and remote execution are design directions, not implemented features.
 
 ## Quick start
 
@@ -76,10 +78,13 @@ public sealed class EngineCoreModule : CxxModule
 
 ```powershell
 dotnet run -- query matrix GameTarget
-dotnet run -- query graph GameTarget --format dot
+dotnet run -- query graph GameTarget --profile Development --fragment Game.Flavor=Client --format dot
 dotnet run -- explain GameTarget --profile Development --fragment Game.Flavor=Client
 dotnet run -- build GameTarget --platform Windows --arch X64 --profile Development --fragment Game.Flavor=Client
 ```
+
+`query graph`, `explain`, and `build` require selectors that resolve to exactly one
+configuration. JSON graph output is machine-readable stdout without registration banners.
 
 The `build` command requires a full MSBuild installation containing both .NET and Visual C++ targets. Use `WithMsBuild(path)` or `MSBUILD_EXE_PATH` to select it.
 
@@ -112,6 +117,11 @@ dotnet run --project benchmarks/RoxyBuildTool.Benchmarks -c Release -- --filter 
 
 See [the benchmark guide](benchmarks/RoxyBuildTool.Benchmarks/README.md) for focused and
 short-run commands and a description of each workload.
+
+Use `--filter "*IncrementalPipelineBenchmarks*"` to compare a full 16-variant graph rebuild with
+cross-invocation action graph cache loading.
+Use `--filter "*GenerationSnapshotBenchmarks*"` to compare a complete generation rebuild with a
+validated output-snapshot hit.
 
 ## License
 

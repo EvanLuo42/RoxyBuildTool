@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Reflection;
@@ -60,6 +61,8 @@ public sealed class BuildToolApp : IBuildToolBuilder, IPluginRegistry
     private readonly List<Type> _rulesModules = [];
     private readonly Dictionary<Type, List<object>> _services = [];
     private TextWriter _error = Console.Error;
+    private bool _incrementalCacheEnabled = true;
+    private int _maxParallelism = Math.Max(1, Environment.ProcessorCount);
     private string? _msbuildPath;
     private TextWriter _output = Console.Out;
     private string _workspaceRoot;
@@ -69,6 +72,9 @@ public sealed class BuildToolApp : IBuildToolBuilder, IPluginRegistry
         _args = args;
         _workspaceRoot = Directory.GetCurrentDirectory();
     }
+
+    /// <summary>Gets the in-process plugin contract version implemented by this host.</summary>
+    public static Version HostApiVersion { get; } = new(0, 1, 0);
 
     /// <inheritdoc />
     public void AddPlugin(IPlugin plugin)
@@ -119,6 +125,21 @@ public sealed class BuildToolApp : IBuildToolBuilder, IPluginRegistry
         return this;
     }
 
+    /// <summary>Limits concurrent target-configuration resolution work.</summary>
+    public BuildToolApp WithMaxParallelism(int maxParallelism)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxParallelism);
+        _maxParallelism = maxParallelism;
+        return this;
+    }
+
+    /// <summary>Enables or disables the content-addressed configured/action graph cache.</summary>
+    public BuildToolApp WithIncrementalCache(bool enabled = true)
+    {
+        _incrementalCacheEnabled = enabled;
+        return this;
+    }
+
     /// <summary>Adds an explicit rules registration module.</summary>
     public BuildToolApp AddRules<T>() where T : IRulesModule, new()
     {
@@ -152,6 +173,15 @@ public sealed class BuildToolApp : IBuildToolBuilder, IPluginRegistry
     {
         try
         {
+            if (_args.Length == 1 && (_args[0].Equals("help", StringComparison.OrdinalIgnoreCase) ||
+                                      _args[0].Equals("--help", StringComparison.OrdinalIgnoreCase) ||
+                                      _args[0].Equals("-h", StringComparison.OrdinalIgnoreCase)))
+                return PrintHelp();
+            if (_args.Length == 1 && (_args[0].Equals("version", StringComparison.OrdinalIgnoreCase) ||
+                                      _args[0].Equals("--version", StringComparison.OrdinalIgnoreCase)))
+                return PrintVersion();
+
+            ValidatePluginCompatibility();
             foreach (var plugin in _plugins.OrderBy(plugin => plugin.Id))
             {
                 plugin.Register(this);
@@ -179,9 +209,12 @@ public sealed class BuildToolApp : IBuildToolBuilder, IPluginRegistry
                 "dot");
             var request = CommandLineParser.Parse(_args, defaultRequest);
 
-            PrintRegistrationSummary(definitions);
+            if (request.Kind is CommandKind.Generate or CommandKind.Build) PrintRegistrationSummary(definitions);
+
             return request.Kind switch
             {
+                CommandKind.Help => PrintHelp(),
+                CommandKind.Version => PrintVersion(),
                 CommandKind.Generate => await GenerateAsync(definitions, request, cancellationToken),
                 CommandKind.Build => await BuildAsync(definitions, request, cancellationToken),
                 CommandKind.QueryMatrix => QueryMatrix(definitions, request),
@@ -207,7 +240,7 @@ public sealed class BuildToolApp : IBuildToolBuilder, IPluginRegistry
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            await _error.WriteLineAsync($"RBT0000: {exception.Message}");
+            await _error.WriteLineAsync($"RBT0000: {exception}");
             return 1;
         }
     }
@@ -218,8 +251,36 @@ public sealed class BuildToolApp : IBuildToolBuilder, IPluginRegistry
         CancellationToken cancellationToken)
     {
         var workspace = ResolveWorkspace(definitions, request.Subject ?? _defaultGenerate.WorkspaceId);
+        var selectedGenerators = request.WorkspaceGenerators.Select(generatorId =>
+                Services<IWorkspaceGenerator>().SingleOrDefault(service => service.Id.Value == generatorId)
+                ?? throw new InvalidOperationException($"Workspace generator '{generatorId}' is not registered."))
+            .ToImmutableArray();
+        var cache = _incrementalCacheEnabled ? new PipelineCache(_workspaceRoot) : null;
+        var generationFingerprint = cache is null
+            ? null
+            : PipelineCache.GenerationFingerprint(
+                definitions,
+                workspace,
+                request.Selectors,
+                request.WorkspaceGenerators,
+                selectedGenerators.Select(generator =>
+                    $"{generator.GetType().AssemblyQualifiedName}|" +
+                    $"{generator.GetType().Assembly.ManifestModule.ModuleVersionId:N}"),
+                _plugins.Select(plugin =>
+                    $"{plugin.Id.Value}@{plugin.Version}|{plugin.GetType().AssemblyQualifiedName}|" +
+                    $"{plugin.GetType().Assembly.ManifestModule.ModuleVersionId:N}"),
+                Services<ToolchainDescriptor>());
+        if (cache is not null && generationFingerprint is not null &&
+            cache.TryLoadGenerationSnapshot(generationFingerprint, out var snapshot))
+        {
+            foreach (var output in snapshot.ReportedOutputs)
+                await _output.WriteLineAsync($"unchanged {output}");
+            await _output.WriteLineAsync($"manifest {snapshot.ManifestPath}");
+            return 0;
+        }
+
         var generated = await ResolveWorkspaceModelAsync(
-            definitions, workspace, request.Selectors, cancellationToken);
+            definitions, workspace, request.Selectors, cache, cancellationToken);
         var pipelineDiagnostics = ValidateWorkspaceModel(generated);
         await WriteDiagnosticsAsync(pipelineDiagnostics);
         if (pipelineDiagnostics.Any(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error))
@@ -228,12 +289,9 @@ public sealed class BuildToolApp : IBuildToolBuilder, IPluginRegistry
         }
 
         var generationResults = new List<(GenerationResult Result, LogicalPath OutputDirectory)>();
-        foreach (var generatorId in request.WorkspaceGenerators)
+        foreach (var generator in selectedGenerators)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var generator = Services<IWorkspaceGenerator>().SingleOrDefault(service => service.Id.Value == generatorId)
-                            ?? throw new InvalidOperationException(
-                                $"Workspace generator '{generatorId}' is not registered.");
             var outputDirectory = new LogicalPath($".roxy/generated/{generator.Id}/{workspace.Id}");
             var result = generator.Generate(generated, new GenerationContext(_workspaceRoot, outputDirectory));
             generationResults.Add((result, outputDirectory));
@@ -253,14 +311,19 @@ public sealed class BuildToolApp : IBuildToolBuilder, IPluginRegistry
             return 2;
         }
 
+        var reportedOutputs = ImmutableArray.CreateBuilder<string>();
+        var snapshotFiles = ImmutableArray.CreateBuilder<string>();
         foreach (var (result, outputDirectory) in generationResults)
         {
             foreach (var file in result.Files)
             {
                 var absolutePath = Path.Combine(_workspaceRoot, outputDirectory.Value, file.Path.Value);
                 var changed = CompareBeforeWrite.Write(absolutePath, file.Content);
+                var relativePath = Path.GetRelativePath(_workspaceRoot, absolutePath);
+                reportedOutputs.Add(relativePath);
+                snapshotFiles.Add(relativePath);
                 await _output.WriteLineAsync(
-                    $"{(changed ? "write" : "unchanged")} {Path.GetRelativePath(_workspaceRoot, absolutePath)}");
+                    $"{(changed ? "write" : "unchanged")} {relativePath}");
             }
 
             foreach (var removed in GeneratedOutputOwnership.Update(
@@ -270,9 +333,19 @@ public sealed class BuildToolApp : IBuildToolBuilder, IPluginRegistry
             {
                 await _output.WriteLineAsync($"remove {removed}");
             }
+
+            snapshotFiles.Add(Path.Combine(outputDirectory.Value, ".roxy-outputs.json"));
         }
 
-        await WriteManifestAsync(workspace, generated, request.WorkspaceGenerators, cancellationToken);
+        var manifestPath = await WriteManifestAsync(
+            workspace, generated, request.WorkspaceGenerators, cancellationToken);
+        snapshotFiles.Add(manifestPath);
+        if (cache is not null && generationFingerprint is not null)
+            cache.StoreGenerationSnapshot(
+                generationFingerprint,
+                snapshotFiles,
+                reportedOutputs,
+                manifestPath);
         return 0;
     }
 
@@ -282,14 +355,7 @@ public sealed class BuildToolApp : IBuildToolBuilder, IPluginRegistry
         CancellationToken cancellationToken)
     {
         var target = ResolveTarget(definitions, request.Subject);
-        var resolution = new MatrixResolver(new()).Resolve(target.Matrix, request.Selectors);
-        if (resolution.Configurations.Length != 1)
-        {
-            throw new InvalidOperationException(
-                $"Build requires exactly one configuration; selectors matched {resolution.Configurations.Length}. Add --profile and custom fragment selectors.");
-        }
-
-        var configuration = resolution.Configurations[0];
+        var configuration = SingleConfiguration(target, request.Selectors, "build");
         var workspace =
             definitions.Workspaces.FirstOrDefault(candidate =>
                 candidate.Targets.Contains(target.Id, StringComparer.Ordinal))
@@ -363,13 +429,13 @@ public sealed class BuildToolApp : IBuildToolBuilder, IPluginRegistry
     private int QueryGraph(DefinitionGraph definitions, CommandRequest request)
     {
         var target = ResolveTarget(definitions, request.Subject);
-        var configuration = SingleOrFirstConfiguration(target, request.Selectors);
+        var configuration = SingleConfiguration(target, request.Selectors, "query graph");
         var graph = DependencyResolver.Resolve(definitions, target, configuration);
         if (request.Format.Equals("json", StringComparison.OrdinalIgnoreCase))
         {
             _output.WriteLine(JsonSerializer.Serialize(graph, IndentedJson));
         }
-        else
+        else if (request.Format.Equals("dot", StringComparison.OrdinalIgnoreCase))
         {
             _output.WriteLine("digraph roxy {");
             foreach (var module in graph.Modules)
@@ -384,21 +450,31 @@ public sealed class BuildToolApp : IBuildToolBuilder, IPluginRegistry
 
             _output.WriteLine("}");
         }
+        else
+        {
+            throw new CommandLineException(
+                $"Unknown graph format '{request.Format}'. Expected 'dot' or 'json'.");
+        }
 
-        return graph.Diagnostics.Any(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error) ? 2 : 0;
+        WriteDiagnostics(graph.Diagnostics);
+        return HasErrors(graph.Diagnostics) ? 2 : 0;
     }
 
     private int Explain(DefinitionGraph definitions, CommandRequest request)
     {
         var target = ResolveTarget(definitions, request.Subject);
-        var configuration = SingleOrFirstConfiguration(target, request.Selectors);
+        var configuration = SingleConfiguration(target, request.Selectors, "explain");
         var graph = DependencyResolver.Resolve(definitions, target, configuration);
+        WriteDiagnostics(graph.Diagnostics);
+        if (HasErrors(graph.Diagnostics)) return 2;
+
         var setting = request.Setting ?? "usage";
         _output.WriteLine($"{target.Id} {configuration.Canonical}");
         if (setting == "Compiler.Optimization")
         {
             var profile = configuration.Values.Single(value => value.Fragment.Value == "Profile").Value;
-            _output.WriteLine($"Compiler.Optimization = {(profile == "Debug" ? "off" : "speed")} (Profile:{profile})");
+            var optimization = ResolveToolchain(configuration).GetPolicy(configuration).Optimize ? "speed" : "off";
+            _output.WriteLine($"Compiler.Optimization = {optimization} (Profile:{profile})");
             return 0;
         }
 
@@ -406,6 +482,9 @@ public sealed class BuildToolApp : IBuildToolBuilder, IPluginRegistry
         {
             _output.WriteLine($"[{module.Id}]");
             WriteUsage("include", module.CompileUsage.IncludeDirectories);
+            WriteUsage("system-include", module.CompileUsage.SystemIncludeDirectories.IsDefault
+                ? []
+                : module.CompileUsage.SystemIncludeDirectories);
             WriteUsage("define", module.CompileUsage.Defines);
             WriteUsage("link", module.CompileUsage.LinkInputs);
             WriteUsage("runtime", module.CompileUsage.RuntimeFiles);
@@ -426,30 +505,56 @@ public sealed class BuildToolApp : IBuildToolBuilder, IPluginRegistry
         DefinitionGraph definitions,
         WorkspaceDefinition workspace,
         IReadOnlyDictionary<FragmentId, string> selectors,
+        PipelineCache? cache,
         CancellationToken cancellationToken)
     {
         var work = workspace.Targets.SelectMany(targetId =>
         {
             var target = definitions.GetTarget(targetId);
+            var definitionFingerprint = cache is null
+                ? null
+                : PipelineCache.DefinitionFingerprint(definitions, target);
             var matrix = new MatrixResolver(new FragmentRegistry()).Resolve(target.Matrix, selectors);
-            return matrix.Configurations.Select(configuration => (Target: target, Configuration: configuration));
+            return matrix.Configurations.Select(configuration =>
+                (Target: target, Configuration: configuration, DefinitionFingerprint: definitionFingerprint));
         }).ToImmutableArray();
-        var resolved = await Task.WhenAll(work.Select(item => Task.Run(() =>
+        var resolved = new ConcurrentBag<(ConfiguredGraph Configured, ActionGraph? Actions)>();
+        await Parallel.ForEachAsync(work, new ParallelOptions
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            CancellationToken = cancellationToken,
+            MaxDegreeOfParallelism = _maxParallelism
+        }, (item, token) =>
+        {
+            token.ThrowIfCancellationRequested();
             var target = item.Target;
             var configuration = item.Configuration;
-            var configured = DependencyResolver.Resolve(definitions, target, configuration);
-            var actionGraph = configured.Diagnostics.Any(diagnostic =>
-                diagnostic.Severity == DiagnosticSeverity.Error)
+            var configuredFingerprint = item.DefinitionFingerprint is null
                 ? null
-                : ActionGraphLowerer.Lower(configured, ResolveToolchain(configuration), workspace.Id);
-            return (Configured: configured, Actions: actionGraph);
-        }, cancellationToken)));
+                : PipelineCache.ConfiguredGraphFingerprint(item.DefinitionFingerprint, configuration);
+            var configured = cache is null || configuredFingerprint is null
+                ? DependencyResolver.Resolve(definitions, target, configuration)
+                : cache.GetOrAddConfiguredGraph(configuredFingerprint,
+                    () => DependencyResolver.Resolve(definitions, target, configuration));
+            ActionGraph? actionGraph = null;
+            if (!configured.Diagnostics.Any(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error))
+            {
+                var toolchain = ResolveToolchain(configuration);
+                actionGraph = cache is null || configuredFingerprint is null
+                    ? ActionGraphLowerer.Lower(configured, toolchain, workspace.Id)
+                    : cache.GetOrAddActionGraph(
+                        PipelineCache.ActionGraphFingerprint(configuredFingerprint, toolchain, workspace.Id),
+                        () => ActionGraphLowerer.Lower(configured, toolchain, workspace.Id));
+            }
+
+            resolved.Add((configured, actionGraph));
+            return ValueTask.CompletedTask;
+        });
+        var ordered = resolved.OrderBy(item => item.Configured.Target.Id, StringComparer.Ordinal)
+            .ThenBy(item => item.Configured.Configuration).ToImmutableArray();
         return WorkspaceAssembler.Assemble(
             workspace,
-            resolved.Select(item => item.Configured),
-            resolved.Where(item => item.Actions is not null).Select(item => item.Actions!));
+            ordered.Select(item => item.Configured),
+            ordered.Where(item => item.Actions is not null).Select(item => item.Actions!));
     }
 
     private ToolchainDescriptor ResolveToolchain(ConfigurationKey configuration)
@@ -515,7 +620,7 @@ public sealed class BuildToolApp : IBuildToolBuilder, IPluginRegistry
     private static string Fragment(ConfigurationKey configuration, string fragment) =>
         configuration.Values.Single(value => value.Fragment.Value == fragment).Value;
 
-    private async Task WriteManifestAsync(
+    private async Task<string> WriteManifestAsync(
         WorkspaceDefinition workspace,
         WorkspaceModel model,
         ImmutableArray<string> generators,
@@ -542,8 +647,10 @@ public sealed class BuildToolApp : IBuildToolBuilder, IPluginRegistry
         }, IndentedJson).Replace("\r\n", "\n", StringComparison.Ordinal) + "\n";
         var path = Path.Combine(_workspaceRoot, ".roxy", "manifests", $"{hash}.json");
         CompareBeforeWrite.Write(path, manifest);
-        await _output.WriteLineAsync($"manifest {Path.GetRelativePath(_workspaceRoot, path)}");
+        var relativePath = Path.GetRelativePath(_workspaceRoot, path);
+        await _output.WriteLineAsync($"manifest {relativePath}");
         cancellationToken.ThrowIfCancellationRequested();
+        return relativePath;
     }
 
     private void PrintRegistrationSummary(DefinitionGraph definitions)
@@ -557,6 +664,30 @@ public sealed class BuildToolApp : IBuildToolBuilder, IPluginRegistry
             $"plugins [{string.Join(',', _plugins.OrderBy(plugin => plugin.Id).Select(plugin => plugin.Id.Value))}]");
         _output.WriteLine(
             $"capabilities [{string.Join(',', _plugins.SelectMany(plugin => plugin.Capabilities.Values).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal))}]");
+    }
+
+    private void ValidatePluginCompatibility()
+    {
+        var capabilities = _plugins.SelectMany(plugin => plugin.Capabilities.Values)
+            .ToImmutableHashSet(StringComparer.Ordinal);
+        var errors = new List<string>();
+        foreach (var plugin in _plugins.OrderBy(plugin => plugin.Id))
+        {
+            if (plugin.MinimumHostApiVersion > HostApiVersion ||
+                (plugin.MaximumHostApiVersion is { } maximum && maximum < HostApiVersion))
+                errors.Add(
+                    $"Plugin '{plugin.Id}' accepts host API {plugin.MinimumHostApiVersion}.." +
+                    $"{plugin.MaximumHostApiVersion?.ToString() ?? "*"}, but the host API is {HostApiVersion}.");
+
+            var missing = plugin.RequiredCapabilities.Values.Where(capability => !capabilities.Contains(capability))
+                .ToImmutableArray();
+            if (!missing.IsEmpty)
+                errors.Add($"Plugin '{plugin.Id}' requires missing capabilities: {string.Join(", ", missing)}.");
+        }
+
+        if (errors.Count > 0)
+            throw new RuleDefinitionException(new Diagnostic("RBT0201", DiagnosticSeverity.Error,
+                string.Join(Environment.NewLine, errors)));
     }
 
     private IEnumerable<T> Services<T>() where T : class =>
@@ -594,13 +725,50 @@ public sealed class BuildToolApp : IBuildToolBuilder, IPluginRegistry
                ?? throw new CommandLineException($"Unknown target '{subject}'.");
     }
 
-    private static ConfigurationKey SingleOrFirstConfiguration(
+    private static ConfigurationKey SingleConfiguration(
         TargetDefinition target,
-        IReadOnlyDictionary<FragmentId, string> selectors)
+        IReadOnlyDictionary<FragmentId, string> selectors,
+        string command)
     {
         var resolution = new MatrixResolver(new()).Resolve(target.Matrix, selectors);
-        return resolution.Configurations.FirstOrDefault()
-               ?? throw new InvalidOperationException($"No configuration matches target '{target.Id}'.");
+        if (resolution.Configurations.Length != 1)
+            throw new CommandLineException(
+                $"{command} requires exactly one configuration; selectors matched " +
+                $"{resolution.Configurations.Length}. Add selectors for every varying axis.");
+
+        return resolution.Configurations[0];
+    }
+
+    private int PrintHelp()
+    {
+        _output.WriteLine("RoxyBuildTool commands:");
+        _output.WriteLine("  generate <workspace> [--workspace <generator,...>] [selectors]");
+        _output.WriteLine("  build <target> [selectors]");
+        _output.WriteLine("  query matrix <target> [selectors] [--why-excluded]");
+        _output.WriteLine("  query graph <target> [selectors] [--format dot|json]");
+        _output.WriteLine("  explain <target> [selectors] [--setting <id>]");
+        _output.WriteLine("  --version");
+        _output.WriteLine();
+        _output.WriteLine("Selectors: --platform, --arch, --profile, --toolchain, --fragment <id>=<value>");
+        return 0;
+    }
+
+    private int PrintVersion()
+    {
+        _output.WriteLine(typeof(BuildToolApp).Assembly.GetName().Version?.ToString() ?? "unknown");
+        return 0;
+    }
+
+    private static bool HasErrors(IEnumerable<Diagnostic> diagnostics)
+    {
+        return diagnostics.Any(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+    }
+
+    private void WriteDiagnostics(IEnumerable<Diagnostic> diagnostics)
+    {
+        foreach (var diagnostic in diagnostics.OrderBy(item => item.Code, StringComparer.Ordinal)
+                     .ThenBy(item => item.Definition, StringComparer.Ordinal))
+            _error.WriteLine($"{diagnostic.Code}: {diagnostic.Message}");
     }
 
     private ProcessStartInfo CreateBuildProcess(string executable, params string[] initialArguments)

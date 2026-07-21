@@ -11,6 +11,9 @@ Generated IDE and compilation-database files are projections of the rules model.
 
 ```text
 .roxy/
+  cache/v1/
+    actions/<content-hash>.bin
+    generation/<request-content-hash>.json
   generated/
     Vs2022/<workspace>/
     CompileDb/<workspace>/
@@ -50,6 +53,20 @@ Every generation request writes a JSON manifest containing:
 - Plugin IDs and versions.
 
 The request hash includes the workspace, selected generators, configurations, and plugin versions. It is an identity for the generation request, not a content-addressed cache of every source file.
+
+## Incremental graph cache
+
+Action graphs are stored as compact, content-addressed binary entries. Configured graphs are cheap
+to re-resolve and are only deduplicated in memory during an invocation. Rules assembly
+identities, source sets, canonical configurations, resolver/lowerer versions, toolchain settings,
+and workspace identity participate in their keys. Invalid or truncated entries are ignored and
+recomputed. Call `WithIncrementalCache(false)` while composing `BuildToolApp` to disable persistent
+graph reuse; generated-output compare-before-write behavior is unaffected.
+
+After a successful generation, the cache also records hashes for every owned output, ownership
+record, and manifest. An identical request can skip model and generator work when those files still
+match. Editing or deleting any tracked file causes a normal regeneration, so the cache never treats
+generated files as authoritative source input.
 
 ## Compare-before-write
 

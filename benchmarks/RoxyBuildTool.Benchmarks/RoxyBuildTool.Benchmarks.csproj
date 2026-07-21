@@ -6,9 +6,11 @@
     </PropertyGroup>
     <ItemGroup>
         <PackageReference Include="BenchmarkDotNet"/>
+      <ProjectReference Include="../../src/RoxyBuildTool/RoxyBuildTool.csproj"/>
         <ProjectReference Include="../../src/RoxyBuildTool.Configuration/RoxyBuildTool.Configuration.csproj"/>
         <ProjectReference Include="../../src/RoxyBuildTool.Graph/RoxyBuildTool.Graph.csproj"/>
         <ProjectReference Include="../../src/RoxyBuildTool.Generators.CompilationDatabase/RoxyBuildTool.Generators.CompilationDatabase.csproj"/>
         <ProjectReference Include="../../src/RoxyBuildTool.Generators.VisualStudio/RoxyBuildTool.Generators.VisualStudio.csproj"/>
+      <ProjectReference Include="../../src/RoxyBuildTool.Platforms.Windows/RoxyBuildTool.Platforms.Windows.csproj"/>
     </ItemGroup>
 </Project>

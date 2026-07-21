@@ -10,4 +10,8 @@
     <ProjectReference Include="../RoxyBuildTool.Toolchains/RoxyBuildTool.Toolchains.csproj" />
     <ProjectReference Include="../RoxyBuildTool.CommandLine/RoxyBuildTool.CommandLine.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="RoxyBuildTool.Benchmarks"/>
+    <InternalsVisibleTo Include="RoxyBuildTool.IntegrationTests"/>
+  </ItemGroup>
 </Project>

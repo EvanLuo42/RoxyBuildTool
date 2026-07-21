@@ -26,13 +26,13 @@ public static class DependencyResolver
         {
             return new ConfiguredGraph(configuration,
                 new ConfiguredTarget(target.Id, target.DisplayName, target.RootModules),
-                [..configured.Values.OrderBy(module => module.Id, StringComparer.Ordinal)],
+                [.. configured.Values.OrderBy(module => module.Id, StringComparer.Ordinal)],
                 diagnostics.ToImmutable());
         }
 
         return new ConfiguredGraph(configuration,
             new ConfiguredTarget(target.Id, target.DisplayName, target.RootModules),
-            [..configured.Values.OrderBy(module => module.Id, StringComparer.Ordinal)],
+            [.. configured.Values.OrderBy(module => module.Id, StringComparer.Ordinal)],
             diagnostics.ToImmutable());
 
         ConfiguredModule? Visit(string moduleId)
@@ -71,6 +71,20 @@ public static class DependencyResolver
             states[moduleId] = VisitState.Visiting;
             stack.Add(moduleId);
 
+            var assemblySources = definition.Sources.Where(source => BuildFileKinds.IsAssemblySource(source.Value))
+                .Select(source => source.Value).Order(StringComparer.Ordinal).ToImmutableArray();
+            if (!assemblySources.IsEmpty)
+                diagnostics.Add(new Diagnostic("RBT2005", DiagnosticSeverity.Error,
+                    $"Module '{moduleId}' contains unsupported assembly-language sources: " +
+                    $"{string.Join(", ", assemblySources)}. ASM, MASM, NASM, and GAS inputs are not supported.",
+                    moduleId, configuration.Canonical));
+
+            if (definition.CxxSettings?.PrecompiledSource is { } precompiledSource &&
+                !definition.Sources.Contains(precompiledSource))
+                diagnostics.Add(new Diagnostic("RBT2006", DiagnosticSeverity.Error,
+                    $"Module '{moduleId}' precompiled source '{precompiledSource}' is not part of its source set.",
+                    moduleId, configuration.Canonical));
+
             var removedDependencies = conditionalRules.SelectMany(rule => rule.RemoveDependencies)
                 .ToHashSet(StringComparer.Ordinal);
             var dependencies = definition.Dependencies
@@ -98,6 +112,17 @@ public static class DependencyResolver
                             moduleId, configuration.Canonical));
                     }
 
+                    continue;
+                }
+
+                if (definition.Language != resolvedDependency.Language &&
+                    dependency.Visibility is not (DependencyVisibility.BuildOrderOnly or DependencyVisibility.Runtime))
+                {
+                    diagnostics.Add(new Diagnostic("RBT2004", DiagnosticSeverity.Error,
+                        $"Cross-language dependency '{moduleId}' -> '{dependency.Module}' cannot use " +
+                        $"visibility '{dependency.Visibility}'. Use Runtime for native runtime artifacts " +
+                        "or BuildOrderOnly for ordering.",
+                        moduleId, configuration.Canonical));
                     continue;
                 }
 
@@ -131,7 +156,8 @@ public static class DependencyResolver
                 dependencies,
                 definition.TargetFrameworks,
                 definition.Packages,
-                definition.RootNamespace);
+                definition.RootNamespace,
+                definition.CxxSettings);
             configured.Add(moduleId, result);
             stack.RemoveAt(stack.Count - 1);
             states[moduleId] = VisitState.Complete;
@@ -145,14 +171,15 @@ public static class DependencyResolver
         ConfigurationKey configuration)
     {
         var outputRoot = BuildPathLayout.OutputRoot(configuration, target.Id);
+        var outputName = module.CxxSettings?.OutputName ?? module.Id;
         return module.Kind switch
         {
             ModuleKind.StaticLibrary => new UsageRequirements([], [],
-                [new UsageValue($"{outputRoot}/{module.Id}.lib", $"{module.Id}:artifact")],
+                [new UsageValue($"{outputRoot}/{outputName}.lib", $"{module.Id}:artifact")],
                 []),
             ModuleKind.SharedLibrary => new UsageRequirements([], [],
-                [new UsageValue($"{outputRoot}/{module.Id}.lib", $"{module.Id}:artifact")],
-                [new UsageValue($"{outputRoot}/{module.Id}.dll", $"{module.Id}:runtime")]),
+                [new UsageValue($"{outputRoot}/{outputName}.lib", $"{module.Id}:artifact")],
+                [new UsageValue($"{outputRoot}/{outputName}.dll", $"{module.Id}:runtime")]),
             ModuleKind.ObjectLibrary => new UsageRequirements([], [],
             [
                 .. module.Sources

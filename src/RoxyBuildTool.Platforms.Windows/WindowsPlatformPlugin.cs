@@ -16,7 +16,6 @@ public sealed class WindowsPlatformPlugin : IPlugin
         "Toolchain.Msvc",
         "DynamicLibrary",
         "Dotnet.Net10",
-        "CppCli",
     ]);
 
     /// <inheritdoc />
@@ -46,11 +45,15 @@ public sealed class WindowsPlatformPlugin : IPlugin
     private static ImmutableDictionary<string, CxxProfilePolicy> CreatePolicies() =>
         new Dictionary<string, CxxProfilePolicy>(StringComparer.Ordinal)
         {
-            ["Debug"] = new(["/Od", "/Zi", "/RTC1", "/DROXY_DEBUG=1"], ["/DEBUG"], false, true, true, false),
-            ["Development"] = new(["/O2", "/Zi", "/DROXY_DEVELOPMENT=1"], ["/DEBUG", "/INCREMENTAL"], true, true, true,
+            ["Debug"] = new(["/EHsc", "/std:c++latest", "/MDd", "/Od", "/Zi", "/RTC1", "/DROXY_DEBUG=1"], ["/DEBUG"],
+                false, true, true, false),
+            ["Development"] = new(["/EHsc", "/std:c++latest", "/MD", "/O2", "/Zi", "/DROXY_DEVELOPMENT=1"],
+                ["/DEBUG", "/INCREMENTAL"], true, true, true,
                 false),
-            ["Release"] = new(["/O2", "/Zi", "/DNDEBUG"], ["/DEBUG", "/OPT:REF", "/OPT:ICF"], true, true, false, false),
-            ["Shipping"] = new(["/O2", "/GL", "/DNDEBUG", "/DROXY_SHIPPING=1"], ["/LTCG", "/OPT:REF", "/OPT:ICF"], true,
+            ["Release"] = new(["/EHsc", "/std:c++latest", "/MD", "/O2", "/Zi", "/DNDEBUG"],
+                ["/DEBUG", "/OPT:REF", "/OPT:ICF"], true, true, false, false),
+            ["Shipping"] = new(["/EHsc", "/std:c++latest", "/MD", "/O2", "/GL", "/DNDEBUG", "/DROXY_SHIPPING=1"],
+                ["/LTCG", "/OPT:REF", "/OPT:ICF"], true,
                 true, false, true)
         }.ToImmutableDictionary(StringComparer.Ordinal);
 }

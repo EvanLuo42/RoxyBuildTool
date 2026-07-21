@@ -54,11 +54,14 @@ dotnet run -- query matrix EditorTarget --why-excluded
 Resolve one configuration and write its module dependency graph:
 
 ```powershell
-dotnet run -- query graph GameTarget --profile Development --format dot
-dotnet run -- query graph GameTarget --profile Development --format json
+dotnet run -- query graph GameTarget --profile Development --fragment Game.Flavor=Client --format dot
+dotnet run -- query graph GameTarget --profile Development --fragment Game.Flavor=Client --format json
 ```
 
-The default format is DOT. Values other than `json` currently select DOT output.
+The default format is DOT.
+Both graph formats require selectors that resolve to exactly one configuration. `json` writes a
+single JSON document to stdout; diagnostics are written to stderr. Formats other than `dot` and
+`json` are rejected.
 
 ### `explain`
 
@@ -72,6 +75,12 @@ dotnet run -- explain GameTarget `
 ```
 
 `--setting Compiler.Optimization` reports the profile-derived optimization policy. Other values currently produce the usage-requirement view.
+Like `query graph`, `explain` requires selectors that resolve to exactly one configuration.
+
+### `--help` and `--version`
+
+`--help`, `-h`, and `help` print command help. `--version` and `version` print the host version.
+These commands do not require rule or plugin registration.
 
 ## Options
 

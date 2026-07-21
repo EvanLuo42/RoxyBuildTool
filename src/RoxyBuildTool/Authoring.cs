@@ -168,7 +168,28 @@ public sealed class BuildRegistry(string workspaceRoot)
         var workspaces = _workspaces.Select(BuildWorkspaceDefinition)
             .OrderBy(workspace => workspace.Id, StringComparer.Ordinal).ToImmutableArray();
         ValidateReferences(modules, targets, workspaces);
-        return new(modules, targets, workspaces);
+        return new DefinitionGraph(modules, targets, workspaces)
+        {
+            RuleAssemblyIdentities = RuleAssemblyIdentities()
+        };
+    }
+
+    private ImmutableArray<string> RuleAssemblyIdentities()
+    {
+        const BindingFlags configureMethodFlags = BindingFlags.Instance | BindingFlags.Static |
+                                                  BindingFlags.Public | BindingFlags.NonPublic |
+                                                  BindingFlags.FlattenHierarchy;
+        return
+        [
+            .._modules.Concat(_targets).Concat(_workspaces)
+                .SelectMany(type => type.GetMethods(configureMethodFlags)
+                    .Where(method => method.IsDefined(typeof(ConfigureAttribute), inherit: true))
+                    .Select(method => method.Module.Assembly)
+                    .Append(type.Assembly))
+                .Distinct()
+                .OrderBy(assembly => assembly.FullName, StringComparer.Ordinal)
+                .Select(assembly => $"{assembly.FullName}|{assembly.ManifestModule.ModuleVersionId:N}")
+        ];
     }
 
     /// <summary>Derives a stable definition ID from a rule type name.</summary>
@@ -177,11 +198,9 @@ public sealed class BuildRegistry(string workspaceRoot)
         var name = type.Name;
         foreach (var suffix in new[] { "Module", "Target", "Workspace" })
         {
-            if (name.EndsWith(suffix, StringComparison.Ordinal) && name.Length > suffix.Length)
-            {
-                name = name[..^suffix.Length];
-                break;
-            }
+            if (!name.EndsWith(suffix, StringComparison.Ordinal) || name.Length <= suffix.Length) continue;
+            name = name[..^suffix.Length];
+            break;
         }
 
         return FragmentRegistry.ToPascalCase(name);
@@ -189,13 +208,14 @@ public sealed class BuildRegistry(string workspaceRoot)
 
     private ModuleDefinition BuildModule(Type type)
     {
+        var relevantFragments = ConfigureFragments(type);
         if (typeof(CxxModule).IsAssignableFrom(type))
         {
             var cache = new ConcurrentDictionary<string, Lazy<ModuleDefinition>>(StringComparer.Ordinal);
             return BuildCxxDefinition((CxxModule)Activator.CreateInstance(type)!, type, configuration: null) with
             {
                 ConfigureForConfiguration = configuration => cache.GetOrAdd(
-                    configuration.Canonical,
+                    RelevantConfigurationKey(configuration, relevantFragments),
                     _ => new Lazy<ModuleDefinition>(
                         () => BuildCxxDefinition(
                             (CxxModule)Activator.CreateInstance(type)!, type, configuration),
@@ -203,22 +223,40 @@ public sealed class BuildRegistry(string workspaceRoot)
             };
         }
 
-        if (typeof(CSharpModule).IsAssignableFrom(type))
+        if (!typeof(CSharpModule).IsAssignableFrom(type))
+            throw new InvalidOperationException(
+                $"Registered module '{type.FullName}' must derive from CxxModule or CSharpModule.");
         {
             var cache = new ConcurrentDictionary<string, Lazy<ModuleDefinition>>(StringComparer.Ordinal);
             return BuildCSharpDefinition((CSharpModule)Activator.CreateInstance(type)!, type, configuration: null) with
             {
                 ConfigureForConfiguration = configuration => cache.GetOrAdd(
-                    configuration.Canonical,
+                    RelevantConfigurationKey(configuration, relevantFragments),
                     _ => new Lazy<ModuleDefinition>(
                         () => BuildCSharpDefinition(
                             (CSharpModule)Activator.CreateInstance(type)!, type, configuration),
                         LazyThreadSafetyMode.ExecutionAndPublication)).Value,
             };
         }
+    }
 
-        throw new InvalidOperationException(
-            $"Registered module '{type.FullName}' must derive from CxxModule or CSharpModule.");
+    private static ImmutableHashSet<FragmentId> ConfigureFragments(Type type)
+    {
+        return type.GetMethods(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public |
+                               BindingFlags.NonPublic | BindingFlags.FlattenHierarchy)
+            .SelectMany(method => method.GetCustomAttributes<ConfigureAttribute>(true))
+            .Where(attribute => !attribute.IsUnconditional)
+            .Select(attribute => attribute.Fragment!.Value)
+            .ToImmutableHashSet();
+    }
+
+    private static string RelevantConfigurationKey(
+        ConfigurationKey configuration,
+        ImmutableHashSet<FragmentId> relevantFragments)
+    {
+        return string.Join(';', configuration.Values
+            .Where(value => relevantFragments.Contains(value.Fragment))
+            .Select(value => $"{value.Fragment.Value}={value.Value}"));
     }
 
     private TargetDefinition BuildTargetDefinition(Type type)
@@ -450,6 +488,7 @@ public class ModuleRules
         Public = new UsageRules();
         Private = new UsageRules();
         Dependencies = new DependencyRules(_dependencies);
+        Cxx = new CxxSettingsRules();
     }
 
     /// <summary>Gets or sets the native output kind.</summary>
@@ -466,6 +505,9 @@ public class ModuleRules
 
     /// <summary>Gets the typed dependency rules.</summary>
     public DependencyRules Dependencies { get; }
+
+    /// <summary>Gets native compiler, linker, output naming, forced-include, and PCH settings.</summary>
+    public CxxSettingsRules Cxx { get; }
 
     /// <summary>Creates conditional mutations applied when <paramref name="value"/> is selected.</summary>
     public ConditionalModuleRules When<T>(T value) where T : struct, Enum =>
@@ -492,7 +534,8 @@ public class ModuleRules
             .OrderBy(edge => edge.Module, StringComparer.Ordinal).ThenBy(edge => edge.Visibility).ToImmutableArray(),
         [],
         [],
-        _conditionalRules.ToImmutableArray());
+        _conditionalRules.ToImmutableArray(),
+        CxxSettings: Cxx.Build());
 
     protected ImmutableArray<LogicalPath> ExpandSources()
     {
@@ -576,6 +619,10 @@ public sealed class CSharpModuleRules : ModuleRules
     internal override ModuleDefinition Build(Type type)
     {
         var native = base.Build(type);
+        if (!Cxx.IsEmpty)
+            throw new RuleDefinitionException(new Diagnostic("RBT2103", DiagnosticSeverity.Error,
+                $"Managed module '{type.FullName}' cannot declare native Cxx settings."));
+
         return native with
         {
             Language = ModuleLanguage.CSharp,
@@ -586,6 +633,7 @@ public sealed class CSharpModuleRules : ModuleRules
             .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToImmutableArray(),
             Packages = _packages.Distinct().OrderBy(package => package.Id, StringComparer.Ordinal).ToImmutableArray(),
             RootNamespace = RootNamespace,
+            CxxSettings = null
         };
     }
 }
@@ -609,23 +657,92 @@ public sealed class UsageRules
     private readonly List<string> _includes = [];
     private readonly List<string> _links = [];
     private readonly List<string> _runtime = [];
+    private readonly List<string> _systemIncludes = [];
 
     public StringRules IncludeDirectories => new(_includes);
     public StringRules Defines => new(_defines);
     public StringRules LinkInputs => new(_links);
     public StringRules RuntimeFiles => new(_runtime);
+    public StringRules SystemIncludeDirectories => new(_systemIncludes);
 
     internal UsageRequirements Build(string module, string visibility) => new(
         Values(_includes, module, visibility),
         Values(_defines, module, visibility),
         Values(_links, module, visibility),
-        Values(_runtime, module, visibility));
+        Values(_runtime, module, visibility),
+        Values(_systemIncludes, module, visibility));
 
     private static ImmutableArray<UsageValue> Values(IEnumerable<string> values, string module, string visibility) =>
         values
             .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)
             .Select(value => new UsageValue(value.Replace('\\', '/'), $"{module}:{visibility}"))
             .ToImmutableArray();
+}
+
+/// <summary>Collects settings that affect native compilation and linking but are not propagated as usage.</summary>
+public sealed class CxxSettingsRules
+{
+    private readonly List<string> _compilerArguments = [];
+    private readonly List<string> _forcedIncludes = [];
+    private readonly List<string> _librarianArguments = [];
+    private readonly List<string> _linkerArguments = [];
+
+    /// <summary>Gets additional structured compiler arguments.</summary>
+    public StringRules CompilerArguments => new(_compilerArguments);
+
+    /// <summary>Gets additional structured linker arguments.</summary>
+    public StringRules LinkerArguments => new(_linkerArguments);
+
+    /// <summary>Gets additional structured librarian arguments.</summary>
+    public StringRules LibrarianArguments => new(_librarianArguments);
+
+    /// <summary>Gets workspace-relative headers forcibly included by every translation unit.</summary>
+    public StringRules ForcedIncludes => new(_forcedIncludes);
+
+    /// <summary>Gets or sets the workspace-relative precompiled-header path.</summary>
+    public string? PrecompiledHeader { get; set; }
+
+    /// <summary>Gets or sets the workspace-relative source that creates the precompiled header.</summary>
+    public string? PrecompiledSource { get; set; }
+
+    /// <summary>Gets or sets the extensionless binary output name. The module ID is used by default.</summary>
+    public string? OutputName { get; set; }
+
+    internal bool IsEmpty => _compilerArguments.Count == 0 && _linkerArguments.Count == 0 &&
+                             _librarianArguments.Count == 0 && _forcedIncludes.Count == 0 &&
+                             PrecompiledHeader is null && PrecompiledSource is null && OutputName is null;
+
+    internal CxxModuleSettings Build()
+    {
+        if (PrecompiledHeader is null != PrecompiledSource is null)
+            throw InvalidNativeSettings(
+                "PrecompiledHeader and PrecompiledSource must either both be set or both be null.");
+
+        if (OutputName is not null &&
+            (OutputName.Length == 0 || OutputName.IndexOfAny(['/', '\\']) >= 0 ||
+             OutputName is "." or ".."))
+            throw InvalidNativeSettings(
+                $"Native output name '{OutputName}' must be a non-empty file stem without directory separators.");
+
+        return new CxxModuleSettings(
+            Normalize(_compilerArguments),
+            Normalize(_linkerArguments),
+            Normalize(_librarianArguments),
+            [.. _forcedIncludes.Distinct(StringComparer.Ordinal).Select(path => new LogicalPath(path))],
+            PrecompiledHeader is null ? null : new LogicalPath(PrecompiledHeader),
+            PrecompiledSource is null ? null : new LogicalPath(PrecompiledSource),
+            OutputName);
+    }
+
+    private static ImmutableArray<string> Normalize(IEnumerable<string> values)
+    {
+        return [.. values.Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.Ordinal)];
+    }
+
+    private static RuleDefinitionException InvalidNativeSettings(string message)
+    {
+        return new RuleDefinitionException(new Diagnostic("RBT2103", DiagnosticSeverity.Error, message));
+    }
 }
 
 /// <summary>Provides an append-only collection surface for string settings.</summary>

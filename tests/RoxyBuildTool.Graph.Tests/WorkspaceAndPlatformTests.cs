@@ -80,6 +80,7 @@ public sealed class WorkspaceAndPlatformTests
         Assert.Equal(new PluginId("Roxy.Windows"), plugin.Id);
         Assert.Equal(new Version(0, 1, 0), plugin.Version);
         Assert.True(plugin.Capabilities.Contains("Platform.Windows"));
+        Assert.False(plugin.Capabilities.Contains("CppCli"));
         var platform =
             Assert.IsType<PlatformDescriptor>(registry.Services.Single(service => service is PlatformDescriptor));
         Assert.Equal(new PlatformId("windows"), platform.Id);
@@ -91,6 +92,7 @@ public sealed class WorkspaceAndPlatformTests
         Assert.Equal("link.exe", toolchain.Linker);
         Assert.Equal("rc.exe", toolchain.ResourceCompiler);
         Assert.True(toolchain.Capabilities.Contains("WindowsResource"));
+        Assert.False(toolchain.Capabilities.Contains("Assembler"));
         Assert.Equal("v143", toolchain.VisualStudioPlatformToolset);
         Assert.Equal(["Debug", "Development", "Release", "Shipping"],
             toolchain.Profiles.Keys.Order(StringComparer.Ordinal));

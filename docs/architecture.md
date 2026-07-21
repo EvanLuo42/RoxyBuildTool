@@ -78,6 +78,8 @@ Dependencies point toward abstractions and immutable models. Core model assembli
 - Default generation request.
 - Standard output and error streams.
 - Optional MSBuild path.
+- Maximum configuration-resolution parallelism.
+- Incremental generation/action graph cache enablement.
 
 The host uses explicit composition:
 
@@ -118,7 +120,7 @@ Inherited methods allow an abstract target to define common platform axes. Filte
 
 The authoring layer produces three definition kinds:
 
-- `ModuleDefinition`: language, output kind, sources, usage requirements, dependencies, managed settings, and conditional rules.
+- `ModuleDefinition`: language, output kind, sources, usage requirements, dependencies, native/managed settings, and conditional rules.
 - `TargetDefinition`: root modules and a configuration matrix.
 - `WorkspaceDefinition`: target set, startup target, and optional imported build host.
 
@@ -176,16 +178,31 @@ Dependencies express propagation and action ordering separately from project pre
 | BuildOrderOnly | No | No | Yes | No |
 | Runtime | Runtime files only | No | Yes | Yes |
 
-Usage requirements contain include directories, preprocessor definitions, link inputs, and runtime files. Every value carries an origin such as `EngineCore:public`. Union removes duplicate values deterministically and preserves the lexicographically first origin.
+Usage requirements contain ordinary and system include directories, preprocessor definitions, link inputs, and runtime files. Every value carries an origin such as `EngineCore:public`. Union removes duplicate values deterministically and preserves the lexicographically first origin.
 
 The resolver performs a depth-first traversal from target root modules. It diagnoses:
 
 - Dependency cycles with a concrete cycle path.
 - References to unregistered modules.
 - Required modules disabled by a matching conditional rule.
+- Compile or interface usage crossing the native/managed language boundary.
 
 Configuration-dependent module definitions are materialized before dependency propagation.
-Target configurations are resolved in parallel. Each module/configuration receives a fresh rules instance, while immutable results and source-directory snapshots are cached by canonical identity.
+Target configurations are resolved with bounded parallelism. Each materialized module definition
+receives a fresh rules instance. Results are cached by only the configuration fragments referenced
+by that module's filtered `[Configure]` methods, while source-directory snapshots are shared for the
+invocation. `BuildToolApp.WithMaxParallelism` controls the concurrency bound.
+
+Across invocations, content-addressed action graphs are stored below `.roxy/cache/v1`. Configured
+graphs are deduplicated within an invocation and re-resolved across invocations because profiling
+shows that resolution is cheaper than rehydrating its expanded usage model. Cache keys include
+semantic definitions, registered rule assembly identities,
+the canonical configuration, resolver/lowerer module identities, toolchain settings, and workspace
+identity. A changed source set or rules build therefore selects a new entry. Corrupt or incompatible
+entries are discarded and rebuilt. `BuildToolApp.WithIncrementalCache(false)` disables this cache.
+Successful generation also records a small content-hashed snapshot. An identical later request can
+validate the owned outputs and manifest, then skip graph construction and generator execution. A
+missing or edited output invalidates the snapshot and runs the complete pipeline normally.
 
 ## Immutable intermediate representations
 
@@ -207,9 +224,14 @@ This is the last layer that knows authoring-level dependency visibility.
 
 - C++ and Windows resource compile, archive, and link.
 - Runtime file copy.
-- .NET restore and build.
+
+Managed projects are lowered by the selected project-system backend. The generator-neutral core
+does not embed Visual Studio paths or synthesize MSBuild restore/build actions.
 
 An action declares its command, argument array, working directory, inputs, outputs, dependencies, environment-variable allowlist, cache policy, remote-execution eligibility, and sensitive arguments.
+Compile and resource actions retain one immutable shared argument prefix per module and a small
+action-specific suffix. Consumers can traverse the segmented view without materializing a duplicate
+array; the public `Arguments` property remains a contiguous compatibility snapshot.
 
 Commands remain structured until execution or generator output. Shell quoting is not part of the core model.
 
@@ -238,7 +260,9 @@ A platform plugin registers `PlatformDescriptor` and `ToolchainDescriptor` servi
 
 Profile policies are toolchain data, not conditionals embedded in the Visual Studio generator. This keeps action semantics available to future executors.
 
-Plugins expose stable IDs, versions, and capability sets. Duplicate plugin IDs are rejected at composition time.
+Plugins expose stable IDs, versions, capability sets, an accepted host API range, and required
+capabilities. Duplicate IDs are rejected at composition time; compatibility is validated before
+any plugin can register services.
 
 ## Generators
 
@@ -280,6 +304,8 @@ Default output layout:
 
 ```text
 .roxy/
+  cache/v1/actions/<content-hash>.bin
+  cache/v1/generation/<request-content-hash>.json
   generated/<generator>/<workspace>/
   manifests/<request-hash>.json
 out/<platform>/<architecture>/<profile>/<configuration-hash>/<target>/
@@ -300,7 +326,8 @@ Determinism rules:
 
 Action semantic hashes include identity, kind, command, arguments, working directory, inputs, outputs, and dependencies. They intentionally exclude presentation-only workspace settings.
 
-Generation manifests record the request, configurations, action hashes, and plugin versions. They provide traceability; they are not a substitute for a complete content cache key.
+Generation manifests record the request, configurations, action hashes, and plugin versions. They
+provide traceability and remain separate from the versioned content-addressed pipeline cache.
 
 ## Diagnostics
 
@@ -322,13 +349,18 @@ The current model includes explicit environment allowlists and sensitive-argumen
 
 Plugins execute in process and therefore share the build host's trust boundary. RoxyBuildTool does not sandbox plugin code. A repository must treat platform and generator packages as build-time code with the same trust requirements as MSBuild tasks or compiler plugins.
 
-Paths entering the core model are workspace-relative. `LogicalPath` rejects rooted paths and parent traversal. External tool discovery paths remain invocation context and are not serialized as logical project paths.
+Source, output, and other `LogicalPath` values are workspace-relative; `LogicalPath` rejects rooted
+paths and parent traversal. Include usage may intentionally name rooted SDK paths or backend
+property expressions, which generators preserve without workspace prefixing. External tool
+discovery paths remain invocation context and are not serialized as logical output paths.
 
 ## Current limitations
 
 Version 0.1 has the following architectural limitations:
 
 - Windows x64 and MSVC are the only platform and toolchain implementation.
+- C++/CLI is intentionally outside the supported capability set.
+- Assembly-language inputs, including ASM/MASM/NASM/GAS source files, are intentionally unsupported.
 - Visual Studio generation targets the current v143 project model.
 - The command host implements generate, build, matrix query, graph query, and explain only.
 - The executor option is reserved and does not change execution.
@@ -348,7 +380,7 @@ The following directions are design goals, not commitments of the current API:
 5. Explicit package, deploy, run, debug, bundle, and signing actions.
 6. Cross-compilation with separate host and target toolchains.
 7. Source generators and analyzers for earlier rules validation.
-8. Plugin compatibility tests and versioned contract negotiation.
+8. Public API compatibility baselines and package release automation.
 
 New backends must consume immutable models. New platforms must register descriptors and capabilities without adding platform-specific cases to core configuration or graph assemblies.
 

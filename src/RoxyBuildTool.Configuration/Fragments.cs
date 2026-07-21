@@ -1,6 +1,5 @@
 using System.Collections.Immutable;
 using System.Reflection;
-using System.Text;
 using RoxyBuildTool.Abstractions;
 using RoxyBuildTool.Model;
 
@@ -128,27 +127,27 @@ public sealed class FragmentRegistry
     /// <summary>Normalizes a stable ID or selector to dot-separated PascalCase.</summary>
     public static string ToPascalCase(string value)
     {
-        var result = new StringBuilder(value.Length);
-        var capitalizeNext = true;
-        foreach (var character in value)
+        var outputLength = value.Count(character => character is not ('-' or '_'));
+        return string.Create(outputLength, value, static (result, source) =>
         {
-            switch (character)
-            {
-                case '.':
-                    result.Append(character);
-                    capitalizeNext = true;
-                    break;
-                case '-' or '_':
-                    capitalizeNext = true;
-                    break;
-                default:
-                    result.Append(capitalizeNext ? char.ToUpperInvariant(character) : character);
-                    capitalizeNext = false;
-                    break;
-            }
-        }
-
-        return result.ToString();
+            var index = 0;
+            var capitalizeNext = true;
+            foreach (var character in source)
+                switch (character)
+                {
+                    case '.':
+                        result[index++] = character;
+                        capitalizeNext = true;
+                        break;
+                    case '-' or '_':
+                        capitalizeNext = true;
+                        break;
+                    default:
+                        result[index++] = capitalizeNext ? char.ToUpperInvariant(character) : character;
+                        capitalizeNext = false;
+                        break;
+                }
+        });
     }
 }
 

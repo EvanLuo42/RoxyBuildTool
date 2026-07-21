@@ -76,11 +76,31 @@ Usage requirements distinguish settings needed by the module from settings expor
 
 ```csharp
 rules.Public.IncludeDirectories.Add("Engine/Runtime/Public");
+rules.Public.SystemIncludeDirectories.Add("ThirdParty/SDK/include");
 rules.Public.Defines.Add("ROXY_RUNTIME_API=1");
 rules.Private.IncludeDirectories.Add("Engine/Runtime/Private");
 rules.Private.LinkInputs.Add("user32.lib");
 rules.Public.RuntimeFiles.Add("ThirdParty/bin/runtime.dll");
 ```
+
+System include directories are emitted with the backend's external/system include mechanism.
+Relative values are workspace-relative; rooted paths and MSBuild property paths remain external
+instead of being prefixed with the workspace root.
+
+Native settings that do not propagate to consumers live under `Cxx`:
+
+```csharp
+rules.Cxx.CompilerArguments.Add("/permissive-");
+rules.Cxx.LinkerArguments.Add("/OPT:REF");
+rules.Cxx.LibrarianArguments.Add("/WX");
+rules.Cxx.ForcedIncludes.Add("Engine/Runtime/Public/BuildConfig.h");
+rules.Cxx.PrecompiledHeader = "Engine/Runtime/Private/RuntimePch.h";
+rules.Cxx.PrecompiledSource = "Engine/Runtime/Private/RuntimePch.cpp";
+rules.Cxx.OutputName = "RuntimeCore";
+```
+
+`PrecompiledHeader` and `PrecompiledSource` must be set together, and the PCH source must be in
+the module's resolved source set. `OutputName` is an extensionless file stem.
 
 ## C# modules
 
@@ -123,6 +143,9 @@ rules.Dependencies.Runtime<EngineRuntimeModule>();
 | `Runtime` | Runtime files only | No | Yes | Yes |
 
 Dependency cycles and references to missing or disabled modules produce diagnostics during graph resolution.
+Compile/interface usage cannot cross the C++/C# language boundary implicitly. Cross-language
+edges must be `Runtime` (for example, a native DLL loaded through P/Invoke) or `BuildOrderOnly`.
+RoxyBuildTool does not model or advertise a C++/CLI toolchain.
 
 ## Custom fragments
 

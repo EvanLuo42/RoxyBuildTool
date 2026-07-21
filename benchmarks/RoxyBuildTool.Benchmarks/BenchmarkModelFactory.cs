@@ -38,13 +38,14 @@ internal static class BenchmarkModelFactory
     public static DefinitionGraph CreateDefinitionGraph(
         int moduleCount,
         int sourcesPerModule,
-        BenchmarkGraphShape graphShape = BenchmarkGraphShape.TransitiveChain)
+        BenchmarkGraphShape graphShape = BenchmarkGraphShape.TransitiveChain,
+        bool includeManaged = true)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(moduleCount, 2);
         ArgumentOutOfRangeException.ThrowIfLessThan(sourcesPerModule, 1);
 
         var modules = Enumerable.Range(0, moduleCount)
-            .Select(index => CreateModule(index, moduleCount, sourcesPerModule, graphShape))
+            .Select(index => CreateModule(index, moduleCount, sourcesPerModule, graphShape, includeManaged))
             .ToImmutableArray();
         var roots = graphShape == BenchmarkGraphShape.TransitiveChain
             ? [ModuleId(moduleCount - 1)]
@@ -74,7 +75,7 @@ internal static class BenchmarkModelFactory
             from profile in BuildProfiles.All
             from linkModel in new[] { LinkModels.Modular, LinkModels.Monolithic }
             select new ConfigurationKey([
-                Platforms.Windows,
+                Configuration.Platforms.Windows,
                 Architectures.X64,
                 profile,
                 Configuration.Toolchains.Msvc,
@@ -88,10 +89,11 @@ internal static class BenchmarkModelFactory
         int index,
         int moduleCount,
         int sourcesPerModule,
-        BenchmarkGraphShape graphShape)
+        BenchmarkGraphShape graphShape,
+        bool includeManaged)
     {
         var id = ModuleId(index);
-        var isManaged = index % 10 == 9 && index != moduleCount - 1;
+        var isManaged = includeManaged && index % 10 == 9 && index != moduleCount - 1;
         var language = isManaged ? ModuleLanguage.CSharp : ModuleLanguage.Cxx;
         var kind = isManaged
             ? ModuleKind.CSharpClassLibrary

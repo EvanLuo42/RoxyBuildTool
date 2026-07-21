@@ -115,7 +115,42 @@ public sealed class ActionGraphLowererBoundaryTests
     }
 
     [Fact]
-    public void ManagedLoweringUsesStableProjectNamesDependenciesAndRuntimeCopies()
+    public void NativeSettingsLowerToPchSystemIncludesForcedIncludesArgumentsAndOutputName()
+    {
+        var configuration = DependencyResolverBoundaryTests.Configuration();
+        var module = Module("app", ModuleKind.Executable, ["src/pch.cpp", "src/main.cpp"]) with
+        {
+            CompileUsage = new UsageRequirements([], [], [], [], [new UsageValue("third_party/sdk", "test")]),
+            CxxSettings = new CxxModuleSettings(
+                ["/WX"], ["/OPT:ICF"], [], [new LogicalPath("config/forced.h")],
+                new LogicalPath("include/pch.h"), new LogicalPath("src/pch.cpp"), "renamed-app")
+        };
+        var graph = new ConfiguredGraph(configuration, new ConfiguredTarget("app", "App", ["app"]), [module], []);
+
+        var lowered = ActionGraphLowerer.Lower(graph, Toolchain(), "workspace");
+        var pchCompile = lowered.Actions.Single(action =>
+            action.Kind == BuildActionKind.Compile && action.Inputs.Contains("src/pch.cpp"));
+        var mainCompile = lowered.Actions.Single(action =>
+            action.Kind == BuildActionKind.Compile && action.Inputs.Contains("src/main.cpp"));
+        var link = lowered.Actions.Single(action => action.Kind == BuildActionKind.Link);
+
+        Assert.Contains("/Ycinclude/pch.h", pchCompile.Arguments);
+        Assert.Contains("/Yuinclude/pch.h", mainCompile.Arguments);
+        Assert.Contains(pchCompile.Id, mainCompile.Dependencies);
+        Assert.All([pchCompile, mainCompile], action =>
+        {
+            Assert.Contains("/external:Ithird_party/sdk", action.Arguments);
+            Assert.Contains("/FIconfig/forced.h", action.Arguments);
+            Assert.Contains("/WX", action.Arguments);
+        });
+        Assert.Contains("/OPT:ICF", link.Arguments);
+        Assert.Contains(link.Outputs, output => output.EndsWith("/renamed-app.exe", StringComparison.Ordinal));
+        Assert.Single(lowered.Artifacts, artifact => artifact.Kind == ArtifactKind.PrecompiledHeader);
+        Assert.Empty(lowered.Validate());
+    }
+
+    [Fact]
+    public void ManagedModulesDoNotLeakProjectSystemPathsIntoCoreActionGraph()
     {
         var configuration = DependencyResolverBoundaryTests.Configuration("debug");
         var native = Module("native", ModuleKind.StaticLibrary, ["native.cpp"]);
@@ -129,42 +164,15 @@ public sealed class ActionGraphLowererBoundaryTests
 
         var lowered = ActionGraphLowerer.Lower(graph, Toolchain(), "mixed");
 
-        var gameRestore =
-            lowered.Actions.Single(action => action.Id.EndsWith("game:DotnetRestore", StringComparison.Ordinal));
-        Assert.Contains(".roxy/generated/Vs2022/mixed/Game.csproj", gameRestore.Arguments);
-        Assert.Contains("--use-lock-file", gameRestore.Arguments);
-        Assert.Contains($"-p:Configuration={BuildConfigurationNames.DisplayName(configuration)}",
-            gameRestore.Arguments);
-        Assert.Contains("-p:Platform=x64", gameRestore.Arguments);
-        Assert.EndsWith("packages.lock.json", Assert.Single(gameRestore.Outputs), StringComparison.Ordinal);
-        Assert.False(gameRestore.Cacheable);
-        Assert.Empty(gameRestore.Dependencies);
-        var gameBuild =
-            lowered.Actions.Single(action => action.Id.EndsWith("game:DotnetBuild", StringComparison.Ordinal));
-        Assert.Contains(
-            lowered.Actions.Single(action => action.Id.EndsWith("native:Archive", StringComparison.Ordinal)).Id,
-            gameBuild.Dependencies);
-
-        var toolRestore =
-            lowered.Actions.Single(action => action.Id.EndsWith("tool:DotnetRestore", StringComparison.Ordinal));
-        Assert.Contains(".roxy/generated/Vs2022/mixed/Tool.Game.csproj", toolRestore.Arguments);
-        var toolBuild =
-            lowered.Actions.Single(action => action.Id.EndsWith("tool:DotnetBuild", StringComparison.Ordinal));
-        Assert.Contains(BuildConfigurationNames.DisplayName(configuration), toolBuild.Arguments);
-        Assert.Contains(toolRestore.Id, toolBuild.Dependencies);
-        Assert.Contains(toolBuild.Arguments,
-            argument => argument.StartsWith("-p:RoxyConfigurationHash=", StringComparison.Ordinal));
-        Assert.Contains("-p:Platform=x64", toolBuild.Arguments);
-        Assert.Equal(2, toolBuild.Outputs.Length);
-        Assert.Contains(toolBuild.Outputs, output => output.Contains("/net8.0/", StringComparison.Ordinal));
-        Assert.Contains(toolBuild.Outputs, output => output.Contains("/net10.0/", StringComparison.Ordinal));
-        Assert.False(toolBuild.Cacheable);
-        Assert.Equal(["DOTNET_ROOT", "NUGET_PACKAGES", "TMP", "TEMP"], toolBuild.EnvironmentWhitelist);
-
-        var copy = lowered.Actions.Single(action =>
-            action.Kind == BuildActionKind.Copy && action.Inputs.Contains("runtime/tool.runtime.dll"));
-        Assert.Contains(toolBuild.Id, copy.Dependencies);
-        Assert.Contains(lowered.Artifacts, artifact => artifact.Kind == ArtifactKind.ManagedAssembly);
+        Assert.Single(lowered.Actions, action =>
+            action.Id.EndsWith("native:Archive", StringComparison.Ordinal));
+        Assert.DoesNotContain(lowered.Actions,
+            action => action.Kind is BuildActionKind.DotNetRestore or BuildActionKind.DotNetBuild);
+        Assert.DoesNotContain(lowered.Actions.SelectMany(action =>
+                action.Arguments.Concat(action.Inputs).Concat(action.Outputs)),
+            value => value.Contains(".roxy/generated/Vs2022", StringComparison.Ordinal));
+        Assert.DoesNotContain(lowered.Artifacts,
+            artifact => artifact.Kind == ArtifactKind.ManagedAssembly);
     }
 
     [Fact]
