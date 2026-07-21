@@ -3,16 +3,17 @@
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0</TargetFramework>
     <LangVersion>14.0</LangVersion>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
     <RestorePackagesPath>../../../artifacts/sample-packages</RestorePackagesPath>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="RoxyBuildTool" />
-    <PackageReference Include="RoxyBuildTool.Platforms.Windows" />
-    <PackageReference Include="RoxyBuildTool.Generators.VisualStudio" />
-    <PackageReference Include="RoxyBuildTool.Generators.CompilationDatabase" />
+    <PackageReference Include="RoxyBuildTool" Version="$(Version)" />
+    <PackageReference Include="RoxyBuildTool.Platforms.Windows" Version="$(Version)" />
+    <PackageReference Include="RoxyBuildTool.Generators.VisualStudio" Version="$(Version)" />
+    <PackageReference Include="RoxyBuildTool.Generators.CompilationDatabase" Version="$(Version)" />
   </ItemGroup>
   <ItemGroup>
     <Compile Include="../**/*.Module.cs" Link="Modules/%(RecursiveDir)%(Filename)%(Extension)" />

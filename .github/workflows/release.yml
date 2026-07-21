@@ -1,0 +1,103 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+          cache: true
+          cache-dependency-path: Directory.Packages.props
+
+      - name: Validate tag and version
+        id: metadata
+        shell: pwsh
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          $semVer = '^(?<tag>v(?<version>(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?))$'
+          if ($tag -notmatch $semVer) {
+            throw "Tag '$tag' must be SemVer in the form v1.2.3 or v1.2.3-rc.1."
+          }
+
+          $version = $Matches.version
+          [xml] $props = Get-Content -Raw Directory.Build.props
+          $projectVersion = [string] $props.SelectSingleNode('/Project/PropertyGroup/Version').InnerText
+          if ($projectVersion -ne $version) {
+            throw "Tag version '$version' does not match Directory.Build.props Version '$projectVersion'."
+          }
+
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Read and validate changelog entry
+        id: changelog
+        uses: mindsers/changelog-reader-action@v2
+        with:
+          path: ./CHANGELOG.md
+          version: ${{ steps.metadata.outputs.version }}
+          validation_level: error
+          validation_depth: 10
+
+      - name: Validate changelog output
+        shell: pwsh
+        env:
+          EXPECTED_VERSION: ${{ steps.metadata.outputs.version }}
+          CHANGELOG_VERSION: ${{ steps.changelog.outputs.version }}
+          CHANGES_FILE: ${{ steps.changelog.outputs.changes_file }}
+        run: |
+          if ($env:CHANGELOG_VERSION -ne $env:EXPECTED_VERSION) {
+            throw "Changelog version '$env:CHANGELOG_VERSION' does not match '$env:EXPECTED_VERSION'."
+          }
+          if (-not (Test-Path -LiteralPath $env:CHANGES_FILE)) {
+            throw "Changelog Reader did not produce a release-notes file."
+          }
+          if ([string]::IsNullOrWhiteSpace((Get-Content -Raw -LiteralPath $env:CHANGES_FILE))) {
+            throw "CHANGELOG.md release section for $env:EXPECTED_VERSION is empty."
+          }
+
+      - name: Restore
+        run: dotnet restore RoxyBuildTool.slnx
+
+      - name: Build
+        run: dotnet build RoxyBuildTool.slnx --configuration Release --no-restore
+
+      - name: Test
+        run: dotnet test RoxyBuildTool.slnx --configuration Release --no-build
+
+      - name: Pack
+        run: dotnet pack RoxyBuildTool.slnx --configuration Release --no-build --output artifacts/packages -p:PackageVersion=${{ steps.metadata.outputs.version }} --include-symbols -p:SymbolPackageFormat=snupkg
+
+      - name: Create checksums
+        shell: pwsh
+        run: |
+          Get-ChildItem artifacts/packages -File |
+            Sort-Object Name |
+            ForEach-Object { "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant(), $_.Name } |
+            Set-Content artifacts/packages/SHA256SUMS.txt -Encoding utf8NoBOM
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v3
+        with:
+          name: ${{ github.ref_name }}
+          body_path: ${{ steps.changelog.outputs.changes_file }}
+          prerelease: ${{ steps.changelog.outputs.status == 'prereleased' }}
+          fail_on_unmatched_files: true
+          files: |
+            artifacts/packages/*
+            CHANGELOG.md
