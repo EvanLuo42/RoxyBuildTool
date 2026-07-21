@@ -8,27 +8,34 @@ using RoxyBuildTool.Model;
 
 namespace RoxyBuildTool;
 
+/// <summary>Registers rules explicitly when assembly scanning is not appropriate.</summary>
 public interface IRulesModule
 {
+    /// <summary>Adds modules, targets, or workspaces to <paramref name="registry"/>.</summary>
     void Register(BuildRegistry registry);
 }
 
+/// <summary>Base type for native C++ module definitions.</summary>
 public abstract class CxxModule
 {
 }
 
+/// <summary>Base type for managed C# module definitions.</summary>
 public abstract class CSharpModule
 {
 }
 
+/// <summary>Marks a method that contributes settings to a module, target, or workspace definition.</summary>
 [AttributeUsage(AttributeTargets.Method, AllowMultiple = true, Inherited = true)]
 public class ConfigureAttribute : Attribute
 {
+    /// <summary>Creates an unconditional configuration method marker.</summary>
     public ConfigureAttribute()
     {
         Values = [];
     }
 
+    /// <summary>Creates a marker that runs when a fragment matches one of the supplied values.</summary>
     public ConfigureAttribute(string fragmentId, params string[] values)
     {
         Fragment = new(fragmentId);
@@ -39,14 +46,19 @@ public class ConfigureAttribute : Attribute
         }
     }
 
+    /// <summary>Gets the fragment used by the filter, or <see langword="null"/> for an unconditional method.</summary>
     public FragmentId? Fragment { get; }
+    /// <summary>Gets the accepted fragment values.</summary>
     public ImmutableArray<FragmentValue> Values { get; }
+    /// <summary>Gets or sets the method ordering priority. Lower values run first.</summary>
     public int Priority { get; set; }
     internal bool IsUnconditional => Fragment is null;
 }
 
+/// <summary>Marks a configuration method filtered by values of enum fragment <typeparamref name="TFragment"/>.</summary>
 public sealed class ConfigureAttribute<TFragment> : ConfigureAttribute where TFragment : struct, Enum
 {
+    /// <summary>Creates a filter from stable enum value names.</summary>
     public ConfigureAttribute(params string[] values)
         : base(GetFragmentId(), values.Select(FragmentRegistry.ToPascalCase).ToArray())
     {
@@ -57,14 +69,17 @@ public sealed class ConfigureAttribute<TFragment> : ConfigureAttribute where TFr
         ?? throw new InvalidOperationException($"Enum '{typeof(TFragment).FullName}' must have [BuildFragment].");
 }
 
+/// <summary>Base type for a build target that selects root modules and a configuration matrix.</summary>
 public abstract class BuildTarget
 {
 }
 
+/// <summary>Base type for a workspace that groups targets for generator output.</summary>
 public abstract class BuildWorkspace
 {
 }
 
+/// <summary>Specifies the artifact produced by a C++ module.</summary>
 public enum CxxOutput
 {
     HeaderOnly,
@@ -74,22 +89,28 @@ public enum CxxOutput
     Executable,
 }
 
+/// <summary>Specifies the artifact produced by a C# module.</summary>
 public enum CSharpOutput
 {
     ClassLibrary,
     ConsoleApplication,
 }
 
+/// <summary>Collects discovered rules and converts them into immutable definitions.</summary>
 public sealed class BuildRegistry(string workspaceRoot)
 {
     private readonly List<Type> _modules = [];
     private readonly List<Type> _targets = [];
     private readonly List<Type> _workspaces = [];
 
+    /// <summary>Registers a module type explicitly.</summary>
     public void AddModule<T>() where T : class, new() => AddUnique(_modules, typeof(T), "module");
+    /// <summary>Registers a target type explicitly.</summary>
     public void AddTarget<T>() where T : BuildTarget, new() => AddUnique(_targets, typeof(T), "target");
+    /// <summary>Registers a workspace type explicitly.</summary>
     public void AddWorkspace<T>() where T : BuildWorkspace, new() => AddUnique(_workspaces, typeof(T), "workspace");
 
+    /// <summary>Discovers concrete rule types from an assembly.</summary>
     public void ScanAssembly(Assembly assembly)
     {
         ArgumentNullException.ThrowIfNull(assembly);
@@ -123,6 +144,7 @@ public sealed class BuildRegistry(string workspaceRoot)
         return new(modules, targets, workspaces);
     }
 
+    /// <summary>Derives a stable definition ID from a rule type name.</summary>
     public static string DefinitionId(Type type)
     {
         var name = type.Name;
@@ -272,6 +294,7 @@ public sealed class BuildRegistry(string workspaceRoot)
     }
 }
 
+/// <summary>Defines sources, output, usage requirements, dependencies, and conditional settings for a C++ module.</summary>
 public class ModuleRules
 {
     private readonly string _workspaceRoot;
@@ -289,12 +312,18 @@ public class ModuleRules
         Dependencies = new DependencyRules(_dependencies);
     }
 
+    /// <summary>Gets or sets the native output kind.</summary>
     public CxxOutput Output { get; set; } = CxxOutput.StaticLibrary;
+    /// <summary>Gets the module source rules.</summary>
     public SourceRules Sources { get; }
+    /// <summary>Gets usage requirements exported to consumers.</summary>
     public UsageRules Public { get; }
+    /// <summary>Gets usage requirements used only by this module.</summary>
     public UsageRules Private { get; }
+    /// <summary>Gets the typed dependency rules.</summary>
     public DependencyRules Dependencies { get; }
 
+    /// <summary>Creates conditional mutations applied when <paramref name="value"/> is selected.</summary>
     public ConditionalModuleRules When<T>(T value) where T : struct, Enum =>
         new(FragmentEncoding.Encode(value), _conditionalRules);
 
@@ -356,6 +385,7 @@ public class ModuleRules
     }
 }
 
+/// <summary>Defines managed output, target frameworks, packages, and shared module settings for a C# module.</summary>
 public sealed class CSharpModuleRules : ModuleRules
 {
     private readonly List<string> _targetFrameworks = [];
@@ -367,9 +397,13 @@ public sealed class CSharpModuleRules : ModuleRules
         Packages = new PackageRules(_packages);
     }
 
+    /// <summary>Gets or sets the managed output kind.</summary>
     public CSharpOutput ManagedOutput { get; set; } = CSharpOutput.ClassLibrary;
+    /// <summary>Gets the target framework collection.</summary>
     public StringRules TargetFrameworks { get; }
+    /// <summary>Gets the package reference collection.</summary>
     public PackageRules Packages { get; }
+    /// <summary>Gets or sets the root namespace emitted into the generated project.</summary>
     public string? RootNamespace { get; set; }
 
     internal override ModuleDefinition Build(Type type)
@@ -389,14 +423,18 @@ public sealed class CSharpModuleRules : ModuleRules
     }
 }
 
+/// <summary>Collects source include patterns and exclusions relative to the workspace root.</summary>
 public sealed class SourceRules(
     List<(string Root, string Pattern)> patterns,
     List<string> exclusions)
 {
+    /// <summary>Adds files matching <paramref name="pattern"/> below <paramref name="root"/>.</summary>
     public void From(string root, string pattern) => patterns.Add((root, pattern));
+    /// <summary>Excludes source paths matching <paramref name="pattern"/>.</summary>
     public void Exclude(string pattern) => exclusions.Add(pattern);
 }
 
+/// <summary>Collects include, define, link, and runtime requirements for one visibility scope.</summary>
 public sealed class UsageRules
 {
     private readonly List<string> _includes = [];
@@ -421,31 +459,42 @@ public sealed class UsageRules
         .ToImmutableArray();
 }
 
+/// <summary>Provides an append-only collection surface for string settings.</summary>
 public sealed class StringRules(List<string> values)
 {
+    /// <summary>Adds a value.</summary>
     public void Add(string value) => values.Add(value);
 }
 
+/// <summary>Collects package references for a generated C# project.</summary>
 public sealed class PackageRules(List<PackageReferenceModel> packages)
 {
+    /// <summary>Adds a package reference.</summary>
     public void Add(string id, string version, bool privateAssets = false) => packages.Add(new(id, version, privateAssets));
 }
 
 internal sealed record DependencySpec(Type Type, DependencyVisibility Visibility);
 
+/// <summary>Collects typed module dependencies and their propagation semantics.</summary>
 public sealed class DependencyRules
 {
     private readonly List<DependencySpec> _dependencies;
 
     internal DependencyRules(List<DependencySpec> dependencies) => _dependencies = dependencies;
 
+    /// <summary>Adds a dependency used by the current module but not exported.</summary>
     public void Private<T>() where T : class => _dependencies.Add(new(typeof(T), DependencyVisibility.Private));
+    /// <summary>Adds a dependency used by the current module and exported to consumers.</summary>
     public void Public<T>() where T : class => _dependencies.Add(new(typeof(T), DependencyVisibility.Public));
+    /// <summary>Adds a dependency exported to consumers but not used to compile the current module.</summary>
     public void Interface<T>() where T : class => _dependencies.Add(new(typeof(T), DependencyVisibility.Interface));
+    /// <summary>Adds an action-ordering dependency without usage propagation.</summary>
     public void BuildOrderOnly<T>() where T : class => _dependencies.Add(new(typeof(T), DependencyVisibility.BuildOrderOnly));
+    /// <summary>Adds a dependency whose runtime files are staged for the current module.</summary>
     public void Runtime<T>() where T : class => _dependencies.Add(new(typeof(T), DependencyVisibility.Runtime));
 }
 
+/// <summary>Builds module mutations applied for one selected fragment value.</summary>
 public sealed class ConditionalModuleRules
 {
     private readonly FragmentValue _match;
@@ -461,6 +510,7 @@ public sealed class ConditionalModuleRules
         _rules.Add(Snapshot());
     }
 
+    /// <summary>Disables the module for the matching configuration.</summary>
     public ConditionalModuleRules Disable()
     {
         _disable = true;
@@ -468,6 +518,7 @@ public sealed class ConditionalModuleRules
         return this;
     }
 
+    /// <summary>Adds a private preprocessor definition for the matching configuration.</summary>
     public ConditionalModuleRules AddDefine(string value)
     {
         _defines.Add(value);
@@ -475,6 +526,7 @@ public sealed class ConditionalModuleRules
         return this;
     }
 
+    /// <summary>Removes a dependency for the matching configuration.</summary>
     public ConditionalModuleRules RemoveDependency<T>() where T : class
     {
         _removeDependencies.Add(BuildRegistry.DefinitionId(typeof(T)));
@@ -486,11 +538,15 @@ public sealed class ConditionalModuleRules
     private ConditionalModuleRule Snapshot() => new(_match, _disable, _defines.ToImmutableArray(), _removeDependencies.ToImmutableArray());
 }
 
+/// <summary>Defines a target's root modules and configuration matrix.</summary>
 public sealed class TargetRules
 {
     private readonly List<Type> _roots = [];
+    /// <summary>Gets the target's root module collection.</summary>
     public TypeRules RootModules => new(_roots);
+    /// <summary>Gets the target's configuration matrix builder.</summary>
     public MatrixBuilder Matrix { get; } = new();
+    /// <summary>Adds an entry module to the target.</summary>
     public void EntryModule<T>() where T : class => _roots.Add(typeof(T));
 
     internal TargetDefinition Build(Type type) => new(
@@ -500,18 +556,25 @@ public sealed class TargetRules
         Matrix.Build());
 }
 
+/// <summary>Provides a typed append-only collection for rule types.</summary>
 public sealed class TypeRules(List<Type> types)
 {
+    /// <summary>Adds rule type <typeparamref name="T"/>.</summary>
     public void Add<T>() where T : class => types.Add(typeof(T));
 }
 
+/// <summary>Defines the targets and startup behavior of a generated workspace.</summary>
 public sealed class WorkspaceRules
 {
     private readonly List<Type> _targets = [];
     private Type? _startup;
+    /// <summary>Gets the workspace target collection.</summary>
     public TypeRules Targets => new(_targets);
+    /// <summary>Gets or sets whether the project-local build host is included in the workspace.</summary>
     public bool IncludeBuildHost { get; set; } = true;
+    /// <summary>Gets or sets the workspace-relative build-host project path.</summary>
     public string BuildHostProject { get; set; } = "Build/RoxyBuild.csproj";
+    /// <summary>Selects the startup target.</summary>
     public void StartupTarget<T>() where T : BuildTarget => _startup = typeof(T);
 
     internal WorkspaceDefinition Build(Type type)

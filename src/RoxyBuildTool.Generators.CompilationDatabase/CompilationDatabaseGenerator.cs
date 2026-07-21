@@ -5,6 +5,7 @@ using RoxyBuildTool.Model;
 
 namespace RoxyBuildTool.Generators.CompilationDatabase;
 
+/// <summary>Generates a deterministic Clang-compatible compilation database from compile actions.</summary>
 public sealed class CompilationDatabaseGenerator : IWorkspaceGenerator
 {
     private static readonly JsonSerializerOptions SerializerOptions = new()
@@ -16,6 +17,7 @@ public sealed class CompilationDatabaseGenerator : IWorkspaceGenerator
     public WorkspaceGeneratorId Id { get; } = new("CompileDb");
     public CapabilitySet Capabilities { get; } = new(["CompileCommands", "ArgumentsArray"]);
 
+    /// <inheritdoc />
     public GenerationResult Generate(WorkspaceModel workspace, GenerationContext context)
     {
         var entries = workspace.ActionGraphs
@@ -40,6 +42,7 @@ public sealed class CompilationDatabaseGenerator : IWorkspaceGenerator
         string Output);
 }
 
+/// <summary>Registers the compilation database workspace generator.</summary>
 public sealed class CompilationDatabasePlugin : IPlugin
 {
     public PluginId Id { get; } = new("Roxy.Generator.CompileDb");
@@ -48,8 +51,10 @@ public sealed class CompilationDatabasePlugin : IPlugin
     public void Register(IPluginRegistry registry) => registry.AddService<IWorkspaceGenerator>(new CompilationDatabaseGenerator());
 }
 
+/// <summary>Provides compilation database composition extensions.</summary>
 public static class CompilationDatabaseExtensions
 {
+    /// <summary>Adds the compilation database plugin and returns the same builder.</summary>
     public static T UseCompilationDatabase<T>(this T builder) where T : IBuildToolBuilder
     {
         builder.AddPlugin(new CompilationDatabasePlugin());

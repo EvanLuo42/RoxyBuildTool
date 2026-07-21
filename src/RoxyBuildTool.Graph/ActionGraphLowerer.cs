@@ -5,8 +5,10 @@ using RoxyBuildTool.Toolchains;
 
 namespace RoxyBuildTool.Graph;
 
+/// <summary>Lowers a configured graph into structured compiler, linker, copy, and .NET actions.</summary>
 public static class ActionGraphLowerer
 {
+    /// <summary>Creates the action graph for one configured target and toolchain.</summary>
     public static ActionGraph Lower(ConfiguredGraph graph, ToolchainDescriptor toolchain, string workspaceName)
     {
         var actions = ImmutableArray.CreateBuilder<BuildAction>();

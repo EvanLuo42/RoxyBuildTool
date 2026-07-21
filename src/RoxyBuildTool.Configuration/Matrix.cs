@@ -4,17 +4,20 @@ using RoxyBuildTool.Model;
 
 namespace RoxyBuildTool.Configuration;
 
+/// <summary>Builds a typed configuration matrix from axes and constraints.</summary>
 public sealed class MatrixBuilder
 {
     private readonly List<MatrixAxis> _axes = [];
     private readonly List<MatrixConstraint> _constraints = [];
 
+    /// <summary>Adds an axis containing values from one fragment.</summary>
     public MatrixBuilder Axis(params FragmentValue[] values)
     {
         AddAxis(values, null);
         return this;
     }
 
+    /// <summary>Adds an axis from values of a fragment enum.</summary>
     public MatrixBuilder Axis<T>(params T[] values) where T : struct, Enum
     {
         var registry = new FragmentRegistry();
@@ -22,12 +25,14 @@ public sealed class MatrixBuilder
         return this;
     }
 
+    /// <summary>Excludes configurations matching <paramref name="predicate"/>.</summary>
     public MatrixBuilder Exclude(Func<ConfigurationView, bool> predicate, string reason)
     {
         _constraints.Add(MatrixConstraint.Exclude(predicate, reason));
         return this;
     }
 
+    /// <summary>Requires <paramref name="requirement"/> when <paramref name="when"/> is true.</summary>
     public MatrixBuilder Require(
         Func<ConfigurationView, bool> when,
         Func<ConfigurationView, bool> requirement,
@@ -37,6 +42,7 @@ public sealed class MatrixBuilder
         return this;
     }
 
+    /// <summary>Creates an immutable matrix definition.</summary>
     public MatrixDefinition Build() => new(_axes.ToImmutableArray(), _constraints.ToImmutableArray());
 
     private void AddAxis(FragmentValue[] values, Type? enumType)
@@ -62,14 +68,18 @@ public sealed class MatrixBuilder
     }
 }
 
+/// <summary>Defines the allowed values for one configuration fragment.</summary>
 public sealed record MatrixAxis(FragmentId Fragment, ImmutableArray<FragmentValue> Values, Type? EnumType);
 
+/// <summary>Contains the axes and constraints that define a target's configuration space.</summary>
 public sealed record MatrixDefinition(
     ImmutableArray<MatrixAxis> Axes,
     ImmutableArray<MatrixConstraint> Constraints);
 
+/// <summary>Provides fragment membership tests while evaluating matrix constraints.</summary>
 public sealed class ConfigurationView(IReadOnlyDictionary<FragmentId, FragmentValue> values)
 {
+    /// <summary>Returns whether the assigned configuration contains <paramref name="value"/>.</summary>
     public bool Is(FragmentValue value)
     {
         if (!values.TryGetValue(value.Fragment, out var actual))
@@ -80,6 +90,7 @@ public sealed class ConfigurationView(IReadOnlyDictionary<FragmentId, FragmentVa
         return actual == value;
     }
 
+    /// <summary>Returns whether the assigned configuration contains an enum fragment value.</summary>
     public bool Is<T>(T value) where T : struct, Enum => Is(FragmentEncoding.Encode(value));
 }
 
@@ -88,15 +99,19 @@ internal sealed class IncompleteConfigurationException(FragmentId fragment) : Ex
     public FragmentId Fragment { get; } = fragment;
 }
 
+/// <summary>Records a rejected partial configuration and the constraint reason.</summary>
 public sealed record ExcludedConfiguration(string AssignedPrefix, string Reason);
 
+/// <summary>Contains accepted configurations and matrix-expansion diagnostics.</summary>
 public sealed record MatrixResolution(
     ImmutableArray<ConfigurationKey> Configurations,
     ImmutableArray<ExcludedConfiguration> Excluded,
     int CandidateCount);
 
+/// <summary>Resolves selectors and constraints into canonical configuration keys.</summary>
 public sealed class MatrixResolver(FragmentRegistry registry)
 {
+    /// <summary>Resolves <paramref name="matrix"/> with optional fragment selectors.</summary>
     public MatrixResolution Resolve(
         MatrixDefinition matrix,
         IReadOnlyDictionary<FragmentId, string>? selectors = null)
@@ -192,6 +207,7 @@ public sealed class MatrixResolver(FragmentRegistry registry)
     }
 }
 
+/// <summary>Represents an exclusion or conditional requirement in a configuration matrix.</summary>
 public sealed record MatrixConstraint
 {
     private MatrixConstraint(
@@ -208,14 +224,17 @@ public sealed record MatrixConstraint
     private Func<ConfigurationView, bool>? Requirement { get; }
     public string Reason { get; }
 
+    /// <summary>Creates a constraint that rejects matching configurations.</summary>
     public static MatrixConstraint Exclude(Func<ConfigurationView, bool> predicate, string reason) =>
         new(predicate, null, reason);
 
+    /// <summary>Creates a conditional requirement constraint.</summary>
     public static MatrixConstraint Require(
         Func<ConfigurationView, bool> when,
         Func<ConfigurationView, bool> requirement,
         string reason) => new(when, requirement, reason);
 
+    /// <summary>Returns whether the assigned configuration is rejected.</summary>
     public bool IsRejected(ConfigurationView view) =>
         Requirement is null ? Condition(view) : Condition(view) && !Requirement(view);
 }

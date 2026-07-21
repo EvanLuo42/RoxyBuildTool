@@ -1,0 +1,10 @@
+- name: Getting started
+  href: getting-started.md
+- name: Authoring build rules
+  href: authoring-rules.md
+- name: Command-line reference
+  href: command-line.md
+- name: Generated output
+  href: generated-output.md
+- name: Troubleshooting
+  href: troubleshooting.md

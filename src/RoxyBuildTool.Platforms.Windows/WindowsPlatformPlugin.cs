@@ -4,6 +4,7 @@ using RoxyBuildTool.Toolchains;
 
 namespace RoxyBuildTool.Platforms.Windows;
 
+/// <summary>Registers the Windows x64 platform and MSVC toolchain descriptors.</summary>
 public sealed class WindowsPlatformPlugin : IPlugin
 {
     public PluginId Id { get; } = new("Roxy.Windows");
@@ -17,6 +18,7 @@ public sealed class WindowsPlatformPlugin : IPlugin
         "CppCli",
     ]);
 
+    /// <inheritdoc />
     public void Register(IPluginRegistry registry)
     {
         var toolchainId = new ToolchainId("Msvc14.4");
@@ -47,8 +49,10 @@ public sealed class WindowsPlatformPlugin : IPlugin
         }.ToImmutableDictionary(StringComparer.Ordinal);
 }
 
+/// <summary>Provides Windows platform composition extensions.</summary>
 public static class WindowsPlatformExtensions
 {
+    /// <summary>Adds the Windows platform plugin and returns the same builder.</summary>
     public static T UseWindowsPlatform<T>(this T builder) where T : IBuildToolBuilder
     {
         builder.AddPlugin(new WindowsPlatformPlugin());

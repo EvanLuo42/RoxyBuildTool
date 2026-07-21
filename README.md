@@ -1,10 +1,48 @@
 # RoxyBuildTool
 
-RoxyBuildTool 是一个通用的、通过 NuGet 使用的强类型 C++/.NET 构建描述系统。当前 Phase 1 支持 Windows x64、MSVC、.NET 10、Visual Studio workspace 和 `compile_commands.json`。
+RoxyBuildTool is a strongly typed, in-process build description system for C++ and .NET. A project-local C# host compiles build rules, resolves an immutable build model, and generates a mixed Visual Studio workspace and `compile_commands.json` from the same configuration graph.
 
-## 规则入口
+> RoxyBuildTool is under active development. Version 0.1 implements a Windows MVP; public APIs may change before 1.0.
 
-Build host 显式选择 rules assembly，Module、Target 和 Workspace 由反射自动发现，无需逐个注册：
+## Features
+
+- Ordinary C# build rules with IntelliSense, compile-time checking, and debugging.
+- C++ header-only, object, static library, shared library, and executable modules.
+- C# class library and console application modules.
+- Typed configuration fragments, matrices, constraints, and canonical keys.
+- Explicit public, private, interface, build-order, and runtime dependency semantics.
+- Mixed C++/.NET Visual Studio solutions and compilation databases.
+- Deterministic output, compare-before-write generation, manifests, and semantic action hashes.
+- Platform and workspace generators registered as explicit plugins.
+
+## Supported environment
+
+The current implementation targets Windows x64, MSVC, .NET 10, and Visual Studio-compatible MSBuild. Linux, macOS, FASTBuild, packaging, deployment, and remote execution are design directions, not implemented features.
+
+## Quick start
+
+The packages are not yet published to a public feed. Build the repository-local packages and run the included consumer sample:
+
+```powershell
+dotnet restore RoxyBuildTool.slnx
+dotnet build RoxyBuildTool.slnx --configuration Release --no-restore
+dotnet pack RoxyBuildTool.slnx --configuration Release --no-build --output artifacts/packages
+
+cd samples/WindowsMvp/Build
+dotnet restore
+dotnet run --no-restore
+```
+
+Generated files are written to:
+
+```text
+samples/WindowsMvp/.roxy/generated/Vs2022/Game/GameWorkspace.sln
+samples/WindowsMvp/.roxy/generated/CompileDb/Game/compile_commands.json
+```
+
+## Build host
+
+The host selects its rules assembly and plugins explicitly:
 
 ```csharp
 return await BuildToolApp.Create(args)
@@ -19,33 +57,48 @@ return await BuildToolApp.Create(args)
     .RunAsync();
 ```
 
-每个 module 的 `*.Module.cs` 放在 module 自己的源码目录中。规则基类只是 marker，配置方法统一使用 `[Configure]`：
+Rules are attached to modules, targets, and workspaces with `[Configure]`:
 
 ```csharp
 public sealed class EngineCoreModule : CxxModule
 {
     [Configure]
-    private static void ConfigureAll(ModuleRules rules) { }
-
-    [Configure<GameFlavor>(nameof(GameFlavor.DedicatedServer), Priority = 100)]
-    private static void ConfigureServer(ModuleRules rules) { }
+    private static void ConfigureAll(ModuleRules rules)
+    {
+        rules.Output = CxxOutput.StaticLibrary;
+        rules.Sources.From("Engine/Core", "**/*.cpp");
+        rules.Public.IncludeDirectories.Add("Engine/Core/Public");
+    }
 }
 ```
 
-抽象 Target 基类上的 `[Configure]` 会被继承，适合复用公共平台矩阵。稳定内部 ID 使用 PascalCase，分段 ID 的每一段也使用 PascalCase（例如 `Game.Flavor`）；生成的工程名使用可读名称；solution configuration 例如 `Development Client | Win64`，内部 architecture ID 为 `X64`。
-
-## 示例
+## Commands
 
 ```powershell
-cd samples/WindowsMvp/Build
-dotnet restore
-dotnet run
 dotnet run -- query matrix GameTarget
+dotnet run -- query graph GameTarget --format dot
+dotnet run -- explain GameTarget --profile Development --fragment Game.Flavor=Client
 dotnet run -- build GameTarget --platform Windows --arch X64 --profile Development --fragment Game.Flavor=Client
 ```
 
-完整 workspace 位于 `samples/WindowsMvp/.roxy/generated/Vs2022/Game/GameWorkspace.sln`。单 target build 使用独立的内部 solution，不会覆盖 Rider 正在打开的完整 workspace。
+The `build` command requires a full MSBuild installation containing both .NET and Visual C++ targets. Use `WithMsBuild(path)` or `MSBUILD_EXE_PATH` to select it.
 
-Roxy 不在生成工程中加入 MSBuild fallback。Rider 的 `Toolset and Build → MSBuild version` 是整个混合 solution 的全局选择；CLI 可通过 `WithMsBuild(path)` 或 `MSBUILD_EXE_PATH` 选择同一个 toolset。`.NET SDK 10.0.3xx` 与 `net10.0` 混合 `.vcxproj` workspace 需要同时带 .NET 10 和 VC targets 的 MSBuild 18.x（Visual Studio 2026），不能使用只含 Core MSBuild 的 SDK 目录替代 C++ targets。
+## Documentation
 
-更多设计细节见 [docs/architecture.md](docs/architecture.md)。
+- [Getting started](docs/guides/getting-started.md)
+- [Authoring build rules](docs/guides/authoring-rules.md)
+- [Command-line reference](docs/guides/command-line.md)
+- [Architecture](docs/architecture.md)
+- [Contributing](CONTRIBUTING.md)
+- [Security policy](SECURITY.md)
+
+Build the Docfx site with:
+
+```powershell
+dotnet tool restore
+dotnet docfx docs/docfx.json
+```
+
+## License
+
+RoxyBuildTool is licensed under the [MIT License](LICENSE).

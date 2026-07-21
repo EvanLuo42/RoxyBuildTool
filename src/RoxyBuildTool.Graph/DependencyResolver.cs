@@ -4,8 +4,10 @@ using RoxyBuildTool.Model;
 
 namespace RoxyBuildTool.Graph;
 
+/// <summary>Resolves module dependencies and usage propagation for one target configuration.</summary>
 public static class DependencyResolver
 {
+    /// <summary>Creates a configured graph and reports missing, disabled, or cyclic dependencies.</summary>
     public static ConfiguredGraph Resolve(DefinitionGraph definitions, TargetDefinition target, ConfigurationKey configuration)
     {
         var states = new Dictionary<string, VisitState>(StringComparer.Ordinal);

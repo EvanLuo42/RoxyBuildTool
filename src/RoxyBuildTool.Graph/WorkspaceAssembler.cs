@@ -4,8 +4,10 @@ using RoxyBuildTool.Model;
 
 namespace RoxyBuildTool.Graph;
 
+/// <summary>Groups configured module variants into a generator-neutral workspace model.</summary>
 public static class WorkspaceAssembler
 {
+    /// <summary>Assembles projects and optionally imports the project-local build host.</summary>
     public static WorkspaceModel Assemble(
         WorkspaceDefinition definition,
         IEnumerable<ConfiguredGraph> configuredGraphs,

@@ -8,6 +8,7 @@ using RoxyBuildTool.Model;
 
 namespace RoxyBuildTool.Generators.VisualStudio;
 
+/// <summary>Generates a mixed C++ and C# Visual Studio workspace.</summary>
 public sealed class VisualStudio2022Generator : IWorkspaceGenerator
 {
     private const string SolutionPlatformName = "Win64";
@@ -23,6 +24,7 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator
         "ProjectReference",
     ]);
 
+    /// <inheritdoc />
     public GenerationResult Generate(WorkspaceModel workspace, GenerationContext context)
     {
         var files = ImmutableArray.CreateBuilder<GeneratedFile>();
@@ -404,6 +406,7 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator
     private sealed record SolutionConfiguration(string Name, ConfigurationKey Key);
 }
 
+/// <summary>Registers the Visual Studio workspace generator.</summary>
 public sealed class VisualStudioPlugin : IPlugin
 {
     public PluginId Id { get; } = new("Roxy.Generator.Vs2022");
@@ -412,8 +415,10 @@ public sealed class VisualStudioPlugin : IPlugin
     public void Register(IPluginRegistry registry) => registry.AddService<IWorkspaceGenerator>(new VisualStudio2022Generator());
 }
 
+/// <summary>Provides Visual Studio generator composition extensions.</summary>
 public static class VisualStudioExtensions
 {
+    /// <summary>Adds the Visual Studio plugin and returns the same builder.</summary>
     public static T UseVisualStudio<T>(this T builder) where T : IBuildToolBuilder
     {
         builder.AddPlugin(new VisualStudioPlugin());

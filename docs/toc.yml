@@ -1,0 +1,16 @@
+- name: Overview
+  href: index.md
+- name: Getting started
+  href: guides/getting-started.md
+- name: Guides
+  href: guides/
+- name: Design
+  href: architecture.md
+- name: API reference
+  href: api/
+- name: Contributing
+  href: contributing.md
+- name: Security
+  href: security.md
+- name: Build the documentation
+  href: README.md

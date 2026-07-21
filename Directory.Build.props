@@ -10,9 +10,19 @@
     <ContinuousIntegrationBuild Condition="'$(CI)' == 'true'">true</ContinuousIntegrationBuild>
     <Version>0.1.0</Version>
     <Authors>RoxyBuildTool contributors</Authors>
-    <RepositoryUrl>https://example.invalid/RoxyBuildTool</RepositoryUrl>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/EvanLuo42/RoxyBuildTool</RepositoryUrl>
     <DefaultItemExcludes>$(DefaultItemExcludes);packages.lock.json</DefaultItemExcludes>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
+  <ItemGroup Condition="'$(MSBuildProjectExtension)' == '.csproj'">
+    <None Include="$(MSBuildThisFileDirectory)docs/package-readme.md"
+          Pack="true"
+          PackagePath="README.md"
+          Link="README.md" />
+  </ItemGroup>
   <PropertyGroup Condition="'$(MSBuildProjectExtension)' == '.csproj' and $(MSBuildProjectName.EndsWith('Tests'))">
     <OutputType>Exe</OutputType>
     <IsPackable>false</IsPackable>

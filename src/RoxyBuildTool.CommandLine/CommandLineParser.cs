@@ -4,6 +4,7 @@ using RoxyBuildTool.Abstractions;
 
 namespace RoxyBuildTool.CommandLine;
 
+/// <summary>Identifies an implemented build-host command.</summary>
 public enum CommandKind
 {
     Generate,
@@ -13,6 +14,7 @@ public enum CommandKind
     Explain,
 }
 
+/// <summary>Contains a parsed command, subject, selectors, and output options.</summary>
 public sealed record CommandRequest(
     CommandKind Kind,
     string? Subject,
@@ -22,8 +24,10 @@ public sealed record CommandRequest(
     bool WhyExcluded,
     string Format);
 
+/// <summary>Parses the command surface used by the in-process build host.</summary>
 public static class CommandLineParser
 {
+    /// <summary>Parses <paramref name="args"/> or returns <paramref name="defaultRequest"/> when no arguments are present.</summary>
     public static CommandRequest Parse(string[] args, CommandRequest defaultRequest)
     {
         if (args.Length == 0)
@@ -63,10 +67,12 @@ public static class CommandLineParser
             switch (option)
             {
                 case "--workspace":
-                    foreach (var generator in NextValue(option).Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                    foreach (var generator in NextValue(option).Split(',',
+                                 StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
                     {
                         generators.Add(ToPascalCase(generator));
                     }
+
                     break;
                 case "--platform":
                     selectors[new("Platform")] = ToPascalCase(NextValue(option));
@@ -86,6 +92,7 @@ public static class CommandLineParser
                     {
                         throw new CommandLineException("--fragment expects <id>=<value>.");
                     }
+
                     selectors[new(ToPascalCase(assignment[0]))] = ToPascalCase(assignment[1]);
                     break;
                 case "--setting":
@@ -152,4 +159,5 @@ public static class CommandLineParser
     }
 }
 
+/// <summary>Represents invalid command syntax or options.</summary>
 public sealed class CommandLineException(string message) : Exception(message);

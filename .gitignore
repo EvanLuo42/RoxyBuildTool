@@ -11,3 +11,5 @@ artifacts/
 packages.lock.json
 TestResults/
 .idea/
+/docs/api/
+/docs/_site/

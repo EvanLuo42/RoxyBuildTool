@@ -13,12 +13,14 @@ using RoxyBuildTool.Toolchains;
 
 namespace RoxyBuildTool;
 
+/// <summary>Provides IDs for built-in workspace generators.</summary>
 public static class WorkspaceGenerators
 {
     public static WorkspaceGeneratorId VisualStudio2022 { get; } = new("Vs2022");
     public static WorkspaceGeneratorId CompilationDatabase { get; } = new("CompileDb");
 }
 
+/// <summary>Configures the default workspace generation request.</summary>
 public sealed class GenerateRequestBuilder
 {
     private readonly List<string> _generators = [];
@@ -28,21 +30,25 @@ public sealed class GenerateRequestBuilder
     internal ImmutableArray<string> Generators => _generators.Distinct(StringComparer.Ordinal).ToImmutableArray();
     internal ImmutableDictionary<FragmentId, string> Selectors => _selectors.ToImmutableDictionary();
 
+    /// <summary>Selects the workspace generators used by the request.</summary>
     public GenerateRequestBuilder Workspace(params WorkspaceGeneratorId[] generators)
     {
         _generators.AddRange(generators.Select(generator => generator.Value));
         return this;
     }
 
+    /// <summary>Adds a built-in or encoded fragment selector.</summary>
     public GenerateRequestBuilder Select(FragmentValue value)
     {
         _selectors[value.Fragment] = value.Value;
         return this;
     }
 
+    /// <summary>Adds a selector from an enum-backed fragment value.</summary>
     public GenerateRequestBuilder Select<T>(T value) where T : struct, Enum => Select(FragmentEncoding.Encode(value));
 }
 
+/// <summary>Coordinates rule discovery, plugin composition, commands, generation, and delegated builds.</summary>
 public sealed class BuildToolApp : IBuildToolBuilder, IPluginRegistry
 {
     private static readonly JsonSerializerOptions IndentedJson = new() { WriteIndented = true };
@@ -64,14 +70,17 @@ public sealed class BuildToolApp : IBuildToolBuilder, IPluginRegistry
         _workspaceRoot = Directory.GetCurrentDirectory();
     }
 
+    /// <summary>Creates an application for the supplied command-line arguments.</summary>
     public static BuildToolApp Create(string[] args) => new(args);
 
+    /// <summary>Sets the root used to resolve logical source and output paths.</summary>
     public BuildToolApp WithWorkspaceRoot(string path)
     {
         _workspaceRoot = Path.GetFullPath(path, Directory.GetCurrentDirectory());
         return this;
     }
 
+    /// <summary>Redirects standard output and optional error output.</summary>
     public BuildToolApp WithOutput(TextWriter output, TextWriter? error = null)
     {
         _output = output;
@@ -79,18 +88,21 @@ public sealed class BuildToolApp : IBuildToolBuilder, IPluginRegistry
         return this;
     }
 
+    /// <summary>Selects the full MSBuild executable or assembly used by the build command.</summary>
     public BuildToolApp WithMsBuild(string path)
     {
         _msbuildPath = Path.GetFullPath(path, Directory.GetCurrentDirectory());
         return this;
     }
 
+    /// <summary>Adds an explicit rules registration module.</summary>
     public BuildToolApp AddRules<T>() where T : IRulesModule, new()
     {
         _rulesModules.Add(typeof(T));
         return this;
     }
 
+    /// <summary>Discovers rule types from the assembly containing <typeparamref name="T"/>.</summary>
     public BuildToolApp DiscoverRulesFromAssemblyContaining<T>()
     {
         var assembly = typeof(T).Assembly;
@@ -101,6 +113,7 @@ public sealed class BuildToolApp : IBuildToolBuilder, IPluginRegistry
         return this;
     }
 
+    /// <summary>Configures the generation request used when no command-line arguments are supplied.</summary>
     public BuildToolApp DefaultGenerate<TWorkspace>(Action<GenerateRequestBuilder> configure)
         where TWorkspace : BuildWorkspace
     {
@@ -109,6 +122,7 @@ public sealed class BuildToolApp : IBuildToolBuilder, IPluginRegistry
         return this;
     }
 
+    /// <inheritdoc />
     public void AddPlugin(IPlugin plugin)
     {
         if (_plugins.Any(existing => existing.Id == plugin.Id))
@@ -118,6 +132,7 @@ public sealed class BuildToolApp : IBuildToolBuilder, IPluginRegistry
         _plugins.Add(plugin);
     }
 
+    /// <inheritdoc />
     public void AddService<T>(T service) where T : class
     {
         var type = typeof(T);
@@ -129,6 +144,7 @@ public sealed class BuildToolApp : IBuildToolBuilder, IPluginRegistry
         services.Add(service);
     }
 
+    /// <summary>Executes the selected command and returns a process-compatible exit code.</summary>
     public async Task<int> RunAsync(CancellationToken cancellationToken = default)
     {
         try
@@ -541,8 +557,10 @@ public sealed class BuildToolApp : IBuildToolBuilder, IPluginRegistry
 
 }
 
+/// <summary>Writes normalized generated text only when its content changed.</summary>
 public static class CompareBeforeWrite
 {
+    /// <summary>Writes <paramref name="content"/> and returns whether the destination changed.</summary>
     public static bool Write(string path, string content)
     {
         var normalized = content.Replace("\r\n", "\n", StringComparison.Ordinal);

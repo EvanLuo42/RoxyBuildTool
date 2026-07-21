@@ -4,6 +4,7 @@ using RoxyBuildTool.Model;
 
 namespace RoxyBuildTool.Toolchains;
 
+/// <summary>Defines compiler and linker policy for one build profile.</summary>
 public sealed record CxxProfilePolicy(
     ImmutableArray<string> CompileArguments,
     ImmutableArray<string> LinkArguments,
@@ -12,6 +13,7 @@ public sealed record CxxProfilePolicy(
     bool Assertions,
     bool MinimalDiagnostics);
 
+/// <summary>Describes compiler commands, profile policies, IDE metadata, and capabilities for a toolchain.</summary>
 public sealed record ToolchainDescriptor(
     ToolchainId Id,
     PlatformId Platform,
@@ -23,6 +25,7 @@ public sealed record ToolchainDescriptor(
     ImmutableDictionary<string, CxxProfilePolicy> Profiles,
     CapabilitySet Capabilities)
 {
+    /// <summary>Gets the policy selected by the configuration's profile fragment.</summary>
     public CxxProfilePolicy GetPolicy(ConfigurationKey configuration)
     {
         var profile = configuration.Values.Single(value => value.Fragment.Value == "Profile").Value;
@@ -32,6 +35,7 @@ public sealed record ToolchainDescriptor(
     }
 }
 
+/// <summary>Describes the architectures, toolchains, and capabilities supported by a platform.</summary>
 public sealed record PlatformDescriptor(
     PlatformId Id,
     ImmutableArray<string> Architectures,
