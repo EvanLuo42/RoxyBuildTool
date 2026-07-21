@@ -30,9 +30,8 @@ The Visual Studio generator writes:
 
 - A solution containing one project per target/module pair.
 - `.vcxproj` and `.vcxproj.filters` files for C++ modules.
-- SDK-style `.csproj` files for C# modules.
-- A generated `Directory.Build.props` that isolates intermediate output.
-- The build-host project when `WorkspaceRules.IncludeBuildHost` is enabled.
+
+The generated solution never contains C# projects, including the project-local rules host.
 
 Human-readable solution configuration names are derived from the profile and custom fragments and include a short canonical hash so configurations that differ only by toolchain or link model cannot collide. Internal configuration identity remains the full canonical key.
 

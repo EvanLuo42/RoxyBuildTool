@@ -15,7 +15,7 @@ This document describes the architecture implemented in the repository. Future w
 
 ## Design goals
 
-RoxyBuildTool is a build description compiler embedded in a project-local .NET console application. It converts typed C# rules into immutable intermediate models and then projects those models into build and workspace artifacts.
+RoxyBuildTool is a native C++ build description compiler embedded in a project-local .NET console application. It converts typed C# rules into immutable intermediate models and then projects those models into C++ build and workspace artifacts.
 
 The design prioritizes:
 
@@ -62,7 +62,7 @@ The pipeline separates authoring, resolution, execution semantics, and presentat
 | `RoxyBuildTool.CommandLine` | Command and selector parsing. |
 | `RoxyBuildTool` | Public authoring facade and in-process application host. |
 | `RoxyBuildTool.Platforms.Windows` | Windows x64 and MSVC descriptors. |
-| `RoxyBuildTool.Generators.VisualStudio` | Mixed Visual Studio solution and project generation. |
+| `RoxyBuildTool.Generators.VisualStudio` | Native C++ Visual Studio solution and project generation. |
 | `RoxyBuildTool.Generators.CompilationDatabase` | `compile_commands.json` generation. |
 
 Dependencies point toward abstractions and immutable models. Core model assemblies do not reference generators. Platform plugins register structured descriptors rather than editing generator templates.
@@ -102,7 +102,7 @@ There is no ambient global plugin discovery. Composition remains visible in sour
 
 ### Discovery
 
-`BuildRegistry` scans selected assemblies for concrete `CxxModule`, `CSharpModule`, `BuildTarget`, and `BuildWorkspace` subclasses. Rules may also be registered explicitly through `IRulesModule`.
+`BuildRegistry` scans selected assemblies for concrete `CxxModule`, `BuildTarget`, and `BuildWorkspace` subclasses. Rules may also be registered explicitly through `IRulesModule`.
 
 Discovered types must be non-generic and have a public parameterless constructor. Definition IDs are derived from type names after removing the conventional `Module`, `Target`, or `Workspace` suffix.
 
@@ -120,9 +120,9 @@ Inherited methods allow an abstract target to define common platform axes. Filte
 
 The authoring layer produces three definition kinds:
 
-- `ModuleDefinition`: language, output kind, sources, usage requirements, dependencies, native/managed settings, and conditional rules.
+- `ModuleDefinition`: native output kind, sources, usage requirements, dependencies, C++ settings, and conditional rules.
 - `TargetDefinition`: root modules and a configuration matrix.
-- `WorkspaceDefinition`: target set, startup target, and optional imported build host.
+- `WorkspaceDefinition`: target set and startup target.
 
 Definitions retain no generator-specific XML or project-system objects.
 
@@ -185,7 +185,6 @@ The resolver performs a depth-first traversal from target root modules. It diagn
 - Dependency cycles with a concrete cycle path.
 - References to unregistered modules.
 - Required modules disabled by a matching conditional rule.
-- Compile or interface usage crossing the native/managed language boundary.
 
 Configuration-dependent module definitions are materialized before dependency propagation.
 Target configurations are resolved with bounded parallelism. Each materialized module definition
@@ -225,9 +224,6 @@ This is the last layer that knows authoring-level dependency visibility.
 - C++ and Windows resource compile, archive, and link.
 - Runtime file copy.
 
-Managed projects are lowered by the selected project-system backend. The generator-neutral core
-does not embed Visual Studio paths or synthesize MSBuild restore/build actions.
-
 An action declares its command, argument array, working directory, inputs, outputs, dependencies, environment-variable allowlist, cache policy, remote-execution eligibility, and sensitive arguments.
 Compile and resource actions retain one immutable shared argument prefix per module and a small
 action-specific suffix. Consumers can traverse the segmented view without materializing a duplicate
@@ -240,10 +236,8 @@ Commands remain structured until execution or generator output. Shell quoting is
 `WorkspaceAssembler` groups configured module variants into projects. A project contains:
 
 - Stable project identity and presentation name.
-- Language.
 - Target/configuration variants.
 - Project dependencies with the exact target/configuration variants in which each edge exists.
-- Optional imported build-host project.
 
 The model includes the configured and action graphs consumed by workspace generators. Generators therefore do not need to re-resolve rules.
 
@@ -272,10 +266,8 @@ The Visual Studio generator consumes `WorkspaceModel` and produces:
 
 - A solution.
 - C++ `.vcxproj` and `.filters` files.
-- SDK-style C# project files.
-- A generated `Directory.Build.props` for isolated intermediate paths.
 
-The solution maps canonical configurations to unique readable display names and `Win64`. Project files carry compiler settings, references, sources, package references, target frameworks, and dependencies derived from the exact immutable variant. A project that has no matching variant is mapped for IDE display but is not built in that solution configuration.
+The solution maps canonical configurations to unique readable display names and `Win64`. Project files carry compiler settings, references, sources, and dependencies derived from the exact immutable variant. A project that has no matching variant is mapped for IDE display but is not built in that solution configuration. The generated solution contains only native C++ projects; the C# rules host remains outside it.
 
 The full workspace and target-scoped build solutions use different output directories. A command-line build cannot overwrite the solution open in an IDE.
 

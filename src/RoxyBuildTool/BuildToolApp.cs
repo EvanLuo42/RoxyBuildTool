@@ -256,16 +256,42 @@ public sealed class BuildToolApp : IBuildToolBuilder, IPluginRegistry
                 ?? throw new InvalidOperationException($"Workspace generator '{generatorId}' is not registered."))
             .ToImmutableArray();
         var cache = _incrementalCacheEnabled ? new PipelineCache(_workspaceRoot) : null;
-        var generationFingerprint = cache is null
+        var generated = await ResolveWorkspaceModelAsync(
+            definitions, workspace, request.Selectors, cache, cancellationToken);
+        var pipelineDiagnostics = ValidateWorkspaceModel(generated);
+        await WriteDiagnosticsAsync(pipelineDiagnostics);
+        if (pipelineDiagnostics.Any(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error))
+        {
+            return 2;
+        }
+
+        await using var generationLock = await WorkspaceGenerationLock.AcquireAsync(
+            _workspaceRoot, workspace.Id, cancellationToken);
+
+        var generatorWork = selectedGenerators.Select(generator =>
+        {
+            var outputDirectory = new LogicalPath($".roxy/generated/{generator.Id}/{workspace.Id}");
+            return (Generator: generator, OutputDirectory: outputDirectory,
+                Context: new GenerationContext(_workspaceRoot, outputDirectory));
+        }).ToImmutableArray();
+        var generatorFingerprints = cache is null
+            ? []
+            : generatorWork.Select(item =>
+                    item.Generator is IWorkspaceGeneratorFingerprintProvider provider
+                        ? $"{item.Generator.Id.Value}|{provider.GetAdditionalFingerprint(generated, item.Context)}"
+                        : null)
+                .ToImmutableArray();
+        var generationFingerprint = cache is null || generatorFingerprints.Any(fingerprint => fingerprint is null)
             ? null
             : PipelineCache.GenerationFingerprint(
-                definitions,
                 workspace,
+                generated,
                 request.Selectors,
                 request.WorkspaceGenerators,
                 selectedGenerators.Select(generator =>
                     $"{generator.GetType().AssemblyQualifiedName}|" +
                     $"{generator.GetType().Assembly.ManifestModule.ModuleVersionId:N}"),
+                generatorFingerprints.Select(fingerprint => fingerprint!),
                 _plugins.Select(plugin =>
                     $"{plugin.Id.Value}@{plugin.Version}|{plugin.GetType().AssemblyQualifiedName}|" +
                     $"{plugin.GetType().Assembly.ManifestModule.ModuleVersionId:N}"),
@@ -279,28 +305,18 @@ public sealed class BuildToolApp : IBuildToolBuilder, IPluginRegistry
             return 0;
         }
 
-        var generated = await ResolveWorkspaceModelAsync(
-            definitions, workspace, request.Selectors, cache, cancellationToken);
-        var pipelineDiagnostics = ValidateWorkspaceModel(generated);
-        await WriteDiagnosticsAsync(pipelineDiagnostics);
-        if (pipelineDiagnostics.Any(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error))
-        {
-            return 2;
-        }
-
         var generationResults = new List<(GenerationResult Result, LogicalPath OutputDirectory)>();
-        foreach (var generator in selectedGenerators)
+        foreach (var item in generatorWork)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var outputDirectory = new LogicalPath($".roxy/generated/{generator.Id}/{workspace.Id}");
-            var result = generator.Generate(generated, new GenerationContext(_workspaceRoot, outputDirectory));
-            generationResults.Add((result, outputDirectory));
+            var result = item.Generator.Generate(generated, item.Context);
+            generationResults.Add((result, item.OutputDirectory));
         }
 
         var generatorDiagnostics = generationResults.SelectMany(item => item.Result.Diagnostics)
             .Concat(generationResults.SelectMany(item => item.Result.Files.Select(file =>
                     (Output: $"{item.OutputDirectory.Value}/{file.Path.Value}", item.Result.Generator)))
-                .GroupBy(item => item.Output, StringComparer.Ordinal)
+                .GroupBy(item => item.Output, LogicalPath.FileSystemComparer)
                 .Where(group => group.Count() > 1)
                 .Select(group => new Diagnostic("RBT4001", DiagnosticSeverity.Error,
                     $"Generated path '{group.Key}' is emitted {group.Count()} times.")))
@@ -366,8 +382,6 @@ public sealed class BuildToolApp : IBuildToolBuilder, IPluginRegistry
             DisplayName = $"{workspace.DisplayName}.{target.DisplayName}.Build",
             Targets = [target.Id],
             StartupTarget = target.Id,
-            IncludeBuildHost = false,
-            BuildHostProject = null,
         };
         var buildRequest = request with
         {
@@ -539,10 +553,11 @@ public sealed class BuildToolApp : IBuildToolBuilder, IPluginRegistry
             if (!configured.Diagnostics.Any(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error))
             {
                 var toolchain = ResolveToolchain(configuration);
-                actionGraph = cache is null || configuredFingerprint is null
+                var resolvedFingerprint = PipelineCache.ResolvedGraphFingerprint(configured);
+                actionGraph = cache is null
                     ? ActionGraphLowerer.Lower(configured, toolchain, workspace.Id)
                     : cache.GetOrAddActionGraph(
-                        PipelineCache.ActionGraphFingerprint(configuredFingerprint, toolchain, workspace.Id),
+                        PipelineCache.ActionGraphFingerprint(resolvedFingerprint, toolchain, workspace.Id),
                         () => ActionGraphLowerer.Lower(configured, toolchain, workspace.Id));
             }
 
@@ -597,7 +612,7 @@ public sealed class BuildToolApp : IBuildToolBuilder, IPluginRegistry
         foreach (var duplicate in model.ActionGraphs
                      .SelectMany(graph => graph.Actions.SelectMany(action => action.Outputs.Select(output =>
                          (Output: output, Action: action.Id))))
-                     .GroupBy(item => item.Output, StringComparer.Ordinal)
+                     .GroupBy(item => item.Output, LogicalPath.FileSystemComparer)
                      .Where(group => group.Select(item => item.Action).Distinct(StringComparer.Ordinal).Count() > 1))
         {
             diagnostics.Add(new Diagnostic("RBT3007", DiagnosticSeverity.Error,
@@ -920,14 +935,14 @@ internal static class GeneratedOutputOwnership
     {
         var outputRoot = Path.GetFullPath(Path.Combine(workspaceRoot, outputDirectory.Value));
         var ownershipPath = Path.Combine(outputRoot, OwnershipFile);
-        var current = currentFiles.Select(path => path.Value).Distinct(StringComparer.Ordinal)
+        var current = currentFiles.Select(path => path.Value).Distinct(LogicalPath.FileSystemComparer)
             .Order(StringComparer.Ordinal).ToImmutableArray();
         var previous = ReadPreviousOwnership(ownershipPath);
         if (previous.IsDefault)
             previous = [];
 
         var removed = ImmutableArray.CreateBuilder<string>();
-        foreach (var stale in previous.Except(current, StringComparer.Ordinal))
+        foreach (var stale in previous.Except(current, LogicalPath.FileSystemComparer))
         {
             LogicalPath logical;
             try

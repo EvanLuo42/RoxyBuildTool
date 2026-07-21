@@ -52,16 +52,6 @@ public sealed class EditorTarget : WindowsTarget
     }
 }
 
-public sealed class ManagedToolTarget : WindowsTarget
-{
-    [Configure]
-    private static void ConfigureTarget(TargetRules rules)
-    {
-        rules.EntryModule<ManagedToolModule>();
-        rules.Matrix.Axis(GameFlavor.Editor);
-    }
-}
-
 public sealed class GameWorkspace : BuildWorkspace
 {
     [Configure]
@@ -69,9 +59,6 @@ public sealed class GameWorkspace : BuildWorkspace
     {
         rules.Targets.Add<GameTarget>();
         rules.Targets.Add<EditorTarget>();
-        rules.Targets.Add<ManagedToolTarget>();
         rules.StartupTarget<EditorTarget>();
-        rules.IncludeBuildHost = true;
-        rules.BuildHostProject = "Build/RoxyBuild.csproj";
     }
 }

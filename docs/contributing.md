@@ -15,13 +15,8 @@ dotnet build RoxyBuildTool.slnx --configuration Release --no-restore
 dotnet test RoxyBuildTool.slnx --configuration Release --no-build
 ```
 
-To verify the package-consumer boundary:
-
-```powershell
-dotnet pack RoxyBuildTool.slnx --configuration Release --no-build --output artifacts/packages
-dotnet restore samples/WindowsMvp/Build/RoxyBuild.csproj --force-evaluate
-dotnet run --project samples/WindowsMvp/Build/RoxyBuild.csproj --no-restore
-```
+The integration suite covers the complete Windows game workspace, configuration matrix,
+module graph, generators, and build invocation. Running a sample is not part of the test workflow.
 
 ## Change requirements
 

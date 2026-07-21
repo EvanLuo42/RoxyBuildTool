@@ -38,14 +38,13 @@ internal static class BenchmarkModelFactory
     public static DefinitionGraph CreateDefinitionGraph(
         int moduleCount,
         int sourcesPerModule,
-        BenchmarkGraphShape graphShape = BenchmarkGraphShape.TransitiveChain,
-        bool includeManaged = true)
+        BenchmarkGraphShape graphShape = BenchmarkGraphShape.TransitiveChain)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(moduleCount, 2);
         ArgumentOutOfRangeException.ThrowIfLessThan(sourcesPerModule, 1);
 
         var modules = Enumerable.Range(0, moduleCount)
-            .Select(index => CreateModule(index, moduleCount, sourcesPerModule, graphShape, includeManaged))
+            .Select(index => CreateModule(index, moduleCount, sourcesPerModule, graphShape))
             .ToImmutableArray();
         var roots = graphShape == BenchmarkGraphShape.TransitiveChain
             ? [ModuleId(moduleCount - 1)]
@@ -59,9 +58,7 @@ internal static class BenchmarkModelFactory
             "production",
             "ProductionWorkspace",
             [target.Id],
-            target.Id,
-            true,
-            new LogicalPath("Build/Rules.csproj"));
+            target.Id);
         return new DefinitionGraph(modules, [target], [workspace]);
     }
 
@@ -89,21 +86,16 @@ internal static class BenchmarkModelFactory
         int index,
         int moduleCount,
         int sourcesPerModule,
-        BenchmarkGraphShape graphShape,
-        bool includeManaged)
+        BenchmarkGraphShape graphShape)
     {
         var id = ModuleId(index);
-        var isManaged = includeManaged && index % 10 == 9 && index != moduleCount - 1;
-        var language = isManaged ? ModuleLanguage.CSharp : ModuleLanguage.Cxx;
-        var kind = isManaged
-            ? ModuleKind.CSharpClassLibrary
-            : index == moduleCount - 1
-                ? ModuleKind.Executable
-                : index > 0 && index % 7 == 0
-                    ? ModuleKind.SharedLibrary
-                    : ModuleKind.StaticLibrary;
+        var kind = index == moduleCount - 1
+            ? ModuleKind.Executable
+            : index > 0 && index % 7 == 0
+                ? ModuleKind.SharedLibrary
+                : ModuleKind.StaticLibrary;
         var sources = Enumerable.Range(0, sourcesPerModule)
-            .Select(source => new LogicalPath(SourcePath(id, source, isManaged)))
+            .Select(source => new LogicalPath(SourcePath(id, source)))
             .ToImmutableArray();
         var dependencies = Dependencies(index, moduleCount, graphShape);
         var publicUsage = new UsageRequirements(
@@ -121,16 +113,12 @@ internal static class BenchmarkModelFactory
         return new ModuleDefinition(
             id,
             $"Module{index:D4}",
-            language,
             kind,
             sources,
             publicUsage,
             privateUsage,
             dependencies,
-            isManaged ? ["net10.0"] : [],
-            isManaged ? [new PackageReferenceModel("System.Collections.Immutable", "10.0.0")] : [],
-            [],
-            isManaged ? $"Production.Module{index:D4}" : null);
+            []);
     }
 
     private static ImmutableArray<DependencyEdge> Dependencies(
@@ -184,10 +172,8 @@ internal static class BenchmarkModelFactory
         return dependencies.ToImmutable();
     }
 
-    private static string SourcePath(string module, int source, bool isManaged)
+    private static string SourcePath(string module, int source)
     {
-        if (isManaged) return $"src/{module}/File{source:D3}.cs";
-
         var extension = source % 11 == 10 ? "rc" : source % 5 == 4 ? "h" : "cpp";
         return $"src/{module}/file{source:D3}.{extension}";
     }

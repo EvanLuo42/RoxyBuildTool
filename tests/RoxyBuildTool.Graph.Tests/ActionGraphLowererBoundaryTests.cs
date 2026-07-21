@@ -83,6 +83,67 @@ public sealed class ActionGraphLowererBoundaryTests
     }
 
     [Fact]
+    public void StaticLibrariesAbsorbPrivateObjectLibraryFilesExactlyOnce()
+    {
+        var configuration = DependencyResolverBoundaryTests.Configuration();
+        var definitions = new DefinitionGraph([
+            DependencyResolverBoundaryTests.Module("leaf", ModuleKind.StaticLibrary),
+            DependencyResolverBoundaryTests.Module(
+                "objects", ModuleKind.ObjectLibrary, sources: ["src/object.cpp"],
+                dependencies: [new("leaf", DependencyVisibility.Private)]),
+            DependencyResolverBoundaryTests.Module(
+                "library", ModuleKind.StaticLibrary, sources: ["src/library.cpp"],
+                dependencies: [new("objects", DependencyVisibility.Private)]),
+            DependencyResolverBoundaryTests.Module(
+                "app", ModuleKind.Executable, sources: ["src/main.cpp"],
+                dependencies: [new("library", DependencyVisibility.Private)]),
+        ], [DependencyResolverBoundaryTests.Target("app", ["app"])], []);
+        var configured = DependencyResolver.Resolve(definitions, definitions.Targets[0], configuration);
+
+        var lowered = ActionGraphLowerer.Lower(configured, Toolchain(), "workspace");
+
+        var objectOutput = Assert.Single(lowered.Actions,
+                action => action.Kind == BuildActionKind.Compile && action.Inputs.Contains("src/object.cpp"))
+            .Outputs.Single();
+        var archive = Assert.Single(lowered.Actions,
+            action => action.Kind == BuildActionKind.Archive &&
+                      action.Id.Contains("library", StringComparison.Ordinal));
+        var appLink = Assert.Single(lowered.Actions,
+            action => action.Kind == BuildActionKind.Link && action.Id.Contains("app", StringComparison.Ordinal));
+        Assert.Contains(objectOutput, archive.Inputs);
+        Assert.DoesNotContain(objectOutput, appLink.Inputs);
+        Assert.Contains(
+            $"{BuildPathLayout.OutputRoot(configuration, "app")}/leaf.lib",
+            appLink.Inputs);
+        Assert.Empty(lowered.Validate());
+    }
+
+    [Fact]
+    public void StaticLibrariesDoNotReexportAuthoredObjectInputsThatTheyArchive()
+    {
+        var configuration = DependencyResolverBoundaryTests.Configuration();
+        var libraryUsage = new UsageRequirements([], [],
+            [new("generated.obj", "test"), new("external.lib", "test")], []);
+        var definitions = new DefinitionGraph([
+            DependencyResolverBoundaryTests.Module(
+                "library", ModuleKind.StaticLibrary, publicUsage: libraryUsage),
+            DependencyResolverBoundaryTests.Module(
+                "app", ModuleKind.Executable,
+                dependencies: [new("library", DependencyVisibility.Private)]),
+        ], [DependencyResolverBoundaryTests.Target("app", ["app"])], []);
+        var configured = DependencyResolver.Resolve(definitions, definitions.Targets[0], configuration);
+
+        var lowered = ActionGraphLowerer.Lower(configured, Toolchain(), "workspace");
+
+        var archive = Assert.Single(lowered.Actions, action => action.Kind == BuildActionKind.Archive);
+        var link = Assert.Single(lowered.Actions, action => action.Kind == BuildActionKind.Link);
+        Assert.Contains("generated.obj", archive.Inputs);
+        Assert.DoesNotContain("generated.obj", link.Inputs);
+        Assert.Contains("external.lib", link.Inputs);
+        Assert.Empty(lowered.Validate());
+    }
+
+    [Fact]
     public void OutputPathsAreConfigurationIsolatedAndObjectNamesDoNotDependOnSourceOrdering()
     {
         var baseConfiguration = DependencyResolverBoundaryTests.Configuration();
@@ -150,32 +211,6 @@ public sealed class ActionGraphLowererBoundaryTests
     }
 
     [Fact]
-    public void ManagedModulesDoNotLeakProjectSystemPathsIntoCoreActionGraph()
-    {
-        var configuration = DependencyResolverBoundaryTests.Configuration("debug");
-        var native = Module("native", ModuleKind.StaticLibrary, ["native.cpp"]);
-        var game = Managed("game", "GameExecutableModule", [new("native", DependencyVisibility.BuildOrderOnly)]);
-        var tool = Managed("tool", "ToolModule", [new("game", DependencyVisibility.Public)]) with
-        {
-            CompileUsage = new([], [], [], [new("runtime/tool.runtime.dll", "test")]),
-            TargetFrameworks = ["net8.0", "net10.0"],
-        };
-        var graph = new ConfiguredGraph(configuration, new("game", "GameTarget", ["tool"]), [tool, game, native], []);
-
-        var lowered = ActionGraphLowerer.Lower(graph, Toolchain(), "mixed");
-
-        Assert.Single(lowered.Actions, action =>
-            action.Id.EndsWith("native:Archive", StringComparison.Ordinal));
-        Assert.DoesNotContain(lowered.Actions,
-            action => action.Kind is BuildActionKind.DotNetRestore or BuildActionKind.DotNetBuild);
-        Assert.DoesNotContain(lowered.Actions.SelectMany(action =>
-                action.Arguments.Concat(action.Inputs).Concat(action.Outputs)),
-            value => value.Contains(".roxy/generated/Vs2022", StringComparison.Ordinal));
-        Assert.DoesNotContain(lowered.Artifacts,
-            artifact => artifact.Kind == ArtifactKind.ManagedAssembly);
-    }
-
-    [Fact]
     public void HeaderOnlyModuleNeverCreatesCompileActions()
     {
         var graph = new ConfiguredGraph(DependencyResolverBoundaryTests.Configuration(),
@@ -204,15 +239,9 @@ public sealed class ActionGraphLowererBoundaryTests
         ModuleKind kind,
         ImmutableArray<string> sources,
         ImmutableArray<DependencyEdge> dependencies = default) => new(
-        id, id, ModuleLanguage.Cxx, kind, sources.Select(path => new LogicalPath(path)).ToImmutableArray(),
+        id, id, kind, sources.Select(path => new LogicalPath(path)).ToImmutableArray(),
         UsageRequirements.Empty, UsageRequirements.Empty, UsageRequirements.Empty, UsageRequirements.Empty,
-        dependencies.IsDefault ? [] : dependencies, [], []);
-
-    private static ConfiguredModule
-        Managed(string id, string displayName, ImmutableArray<DependencyEdge> dependencies) => new(
-        id, displayName, ModuleLanguage.CSharp, ModuleKind.CSharpConsoleApplication, [new($"{id}.cs")],
-        UsageRequirements.Empty, UsageRequirements.Empty, UsageRequirements.Empty, UsageRequirements.Empty,
-        dependencies, ["net10.0"], []);
+        dependencies.IsDefault ? [] : dependencies);
 
     internal static ToolchainDescriptor Toolchain() => new(
         new("Msvc14.4"), new("windows"), "x64", "cl.exe", "lib.exe", "link.exe", "v143",

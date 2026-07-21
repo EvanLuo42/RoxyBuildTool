@@ -9,18 +9,18 @@ using RoxyBuildTool.Model;
 
 namespace RoxyBuildTool.Generators.VisualStudio;
 
-/// <summary>Generates a mixed C++ and C# Visual Studio workspace.</summary>
-public sealed class VisualStudio2022Generator : IWorkspaceGenerator
+/// <summary>Generates a native C++ Visual Studio workspace.</summary>
+public sealed class VisualStudio2022Generator : IWorkspaceGenerator, IWorkspaceGeneratorFingerprintProvider
 {
     private const string SolutionPlatformName = "Win64";
     private const string MsBuild = "http://schemas.microsoft.com/developer/msbuild/2003";
     private static readonly Guid CxxProjectType = new("8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942");
-    private static readonly Guid CSharpProjectType = new("FAE04EC0-301F-11D3-BF4B-00C04F79EFBC");
 
     private static readonly ConditionalWeakTable<ConfigurationKey, ConfigurationPresentation>
         ConfigurationPresentations = new();
 
     private static readonly ToolchainBuildSettings UnknownToolchain = new("Unknown", "v143", [], []);
+
     private static readonly XmlWriterSettings ProjectWriterSettings = new()
     {
         OmitXmlDeclaration = true,
@@ -33,10 +33,14 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator
 
     public WorkspaceGeneratorId Id { get; } = new("Vs2022");
 
+    /// <inheritdoc />
+    public string GetAdditionalFingerprint(WorkspaceModel workspace, GenerationContext context)
+    {
+        return string.Empty;
+    }
+
     public CapabilitySet Capabilities { get; } = new([
-        "MixedWorkspace",
         "NativeMsbuild",
-        "SdkStyleCsharp",
         "ProjectReference",
     ]);
 
@@ -48,26 +52,12 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator
         var toolchains = workspace.ActionGraphs.ToDictionary(
             graph => (graph.Target, graph.Configuration.Canonical),
             graph => graph.Toolchain ?? UnknownToolchain);
-        if (workspace.Projects.Any(project => !project.IsBuildHost && project.Language == ModuleLanguage.CSharp))
+        foreach (var project in workspace.Projects)
         {
-            files.Add(new GeneratedFile(new LogicalPath("Directory.Build.props"),
-                GenerateDirectoryBuildProps(context)));
-        }
-
-        foreach (var project in workspace.Projects.Where(project => !project.IsBuildHost))
-        {
-            if (project.Language == ModuleLanguage.Cxx)
-            {
-                files.Add(new GeneratedFile(new LogicalPath($"{ProjectFileStem(project)}.vcxproj"),
-                    GenerateVcxproj(project, projectsById, toolchains, context)));
-                files.Add(new GeneratedFile(new LogicalPath($"{ProjectFileStem(project)}.vcxproj.filters"),
-                    GenerateFilters(project, context)));
-            }
-            else
-            {
-                files.Add(new GeneratedFile(new LogicalPath($"{ProjectFileStem(project)}.csproj"),
-                    GenerateCsproj(project, projectsById, context)));
-            }
+            files.Add(new GeneratedFile(new LogicalPath($"{ProjectFileStem(project)}.vcxproj"),
+                GenerateVcxproj(project, projectsById, toolchains, context)));
+            files.Add(new GeneratedFile(new LogicalPath($"{ProjectFileStem(project)}.vcxproj.filters"),
+                GenerateFilters(project, context)));
         }
 
         files.Add(new GeneratedFile(new LogicalPath($"{workspace.Name}.sln"), GenerateSolution(workspace, context)));
@@ -85,13 +75,10 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator
 
         foreach (var project in workspace.Projects.OrderBy(project => project.Id, StringComparer.Ordinal))
         {
-            var typeGuid = project.Language == ModuleLanguage.Cxx ? CxxProjectType : CSharpProjectType;
             var projectGuid = ProjectGuid(project.Id);
-            var path = project.IsBuildHost
-                ? ToWindows(RelativeFromOutput(context, project.ImportedProject!.Value.Value))
-                : $"{ProjectFileStem(project)}.{ProjectExtension(project)}";
+            var path = $"{ProjectFileStem(project)}.vcxproj";
             builder.AppendLine(CultureInfo.InvariantCulture,
-                $"Project(\"{{{typeGuid.ToString().ToUpperInvariant()}}}\") = \"{ProjectFileStem(project)}\", \"{path}\", \"{{{projectGuid.ToString().ToUpperInvariant()}}}\"");
+                $"Project(\"{{{CxxProjectType.ToString().ToUpperInvariant()}}}\") = \"{ProjectFileStem(project)}\", \"{path}\", \"{{{projectGuid.ToString().ToUpperInvariant()}}}\"");
             var solutionDependencies = SolutionDependencies(project);
             if (!solutionDependencies.IsEmpty)
             {
@@ -125,12 +112,10 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator
             var guid = ProjectGuid(project.Id).ToString().ToUpperInvariant();
             foreach (var configuration in configurations)
             {
-                var mapped = project.IsBuildHost
-                    ? "Debug"
-                    : DisplayName(MapProjectConfiguration(project, configuration.Key));
+                var mapped = DisplayName(MapProjectConfiguration(project, configuration.Key));
                 builder.AppendLine(CultureInfo.InvariantCulture,
-                    $"\t\t{{{guid}}}.{configuration.Name}|{SolutionPlatformName}.ActiveCfg = {mapped}|{(project.IsBuildHost ? "Any CPU" : "x64")}");
-                if (!project.IsBuildHost && project.Variants.Any(variant =>
+                    $"\t\t{{{guid}}}.{configuration.Name}|{SolutionPlatformName}.ActiveCfg = {mapped}|x64");
+                if (project.Variants.Any(variant =>
                         variant.Configuration.Canonical == configuration.Key.Canonical))
                 {
                     builder.AppendLine(CultureInfo.InvariantCulture,
@@ -166,6 +151,7 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator
                 WriteMsBuild(writer, "Platform", "x64");
                 writer.WriteEndElement();
             }
+
             writer.WriteEndElement();
 
             StartMsBuild(writer, "PropertyGroup");
@@ -282,115 +268,6 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator
         }
     }
 
-    private static string GenerateCsproj(
-        WorkspaceProject project,
-        IReadOnlyDictionary<string, WorkspaceProject> projectsById,
-        GenerationContext context)
-    {
-        var representative = project.Variants[0].Module;
-        var targetFrameworks = TargetFrameworks(representative);
-        var commonTargetFrameworks = project.Variants.All(variant =>
-            TargetFrameworks(variant.Module).SequenceEqual(targetFrameworks, StringComparer.Ordinal));
-        var outputType = ManagedOutputType(representative);
-        var commonOutputType = project.Variants.All(variant => ManagedOutputType(variant.Module) == outputType);
-        var rootNamespace = ManagedRootNamespace(project, representative);
-        var commonRootNamespace = project.Variants.All(variant =>
-            ManagedRootNamespace(project, variant.Module) == rootNamespace);
-        return WriteXml(writer =>
-        {
-            writer.WriteStartElement("Project");
-            writer.WriteAttributeString("Sdk", "Microsoft.NET.Sdk");
-            writer.WriteStartElement("PropertyGroup");
-            writer.WriteElementString("LangVersion", "14.0");
-            writer.WriteElementString("Nullable", "enable");
-            writer.WriteElementString("ImplicitUsings", "enable");
-            writer.WriteElementString("Deterministic", "true");
-            writer.WriteElementString("ManagePackageVersionsCentrally", "false");
-            writer.WriteElementString("RestorePackagesWithLockFile", "true");
-            writer.WriteElementString("NuGetLockFilePath", "$(BaseIntermediateOutputPath)packages.lock.json");
-            writer.WriteElementString("EnableDefaultItems", "false");
-            writer.WriteElementString("Platforms", "x64");
-            writer.WriteElementString("AssemblyName", representative.Id);
-            writer.WriteElementString("RoxyWorkspaceRoot", ToWindows(RelativeFromOutput(context, ".")));
-            if (commonOutputType) writer.WriteElementString("OutputType", outputType);
-            if (commonRootNamespace) writer.WriteElementString("RootNamespace", rootNamespace);
-            if (commonTargetFrameworks) WriteTargetFrameworks(writer, targetFrameworks);
-            writer.WriteEndElement();
-
-            foreach (var variant in project.Variants)
-            {
-                var profile = Fragment(variant.Configuration, "Profile");
-                writer.WriteStartElement("PropertyGroup");
-                writer.WriteAttributeString("Condition", Condition(variant));
-                writer.WriteElementString("Optimize", profile == "Debug" ? "false" : "true");
-                writer.WriteElementString("OutputPath",
-                    $@"$(RoxyWorkspaceRoot)\{ToWindows(BuildPathLayout.OutputRoot(variant.Configuration, variant.Target))}\{variant.Module.Id}\");
-                writer.WriteElementString("IntermediateOutputPath",
-                    $@"$(RoxyWorkspaceRoot)\{ToWindows(BuildPathLayout.IntermediateRoot(variant.Configuration, variant.Target))}\{variant.Module.Id}\");
-                if (!commonTargetFrameworks) WriteTargetFrameworks(writer, TargetFrameworks(variant.Module));
-                if (!commonOutputType) writer.WriteElementString("OutputType", ManagedOutputType(variant.Module));
-                if (!commonRootNamespace)
-                    writer.WriteElementString("RootNamespace", ManagedRootNamespace(project, variant.Module));
-                writer.WriteEndElement();
-
-                if (!variant.Module.CompileUsage.RuntimeFiles.IsEmpty)
-                {
-                    writer.WriteStartElement("ItemGroup");
-                    writer.WriteAttributeString("Condition", Condition(variant));
-                    foreach (var runtime in variant.Module.CompileUsage.RuntimeFiles)
-                    {
-                        writer.WriteStartElement("Content");
-                        writer.WriteAttributeString("Include", FormatProjectPath(runtime.Value));
-                        writer.WriteElementString("Link", Path.GetFileName(runtime.Value));
-                        writer.WriteElementString("Visible", "false");
-                        writer.WriteElementString("CopyToOutputDirectory", "PreserveNewest");
-                        writer.WriteEndElement();
-                    }
-
-                    writer.WriteEndElement();
-                }
-            }
-
-            writer.WriteStartElement("ItemGroup");
-            foreach (var item in SourceVariants(project))
-            {
-                writer.WriteStartElement("Compile");
-                writer.WriteAttributeString("Include", ToWindows(RelativeFromOutput(context, item.Source.Value)));
-                if (VariantCondition(project, item.Variants) is { } condition)
-                    writer.WriteAttributeString("Condition", condition);
-                writer.WriteEndElement();
-            }
-            writer.WriteEndElement();
-
-            WriteProjectReferences(writer, project, projectsById, string.Empty);
-            var packages = project.Variants
-                .SelectMany(variant => variant.Module.Packages.Select(package => (Variant: variant, Package: package)))
-                .GroupBy(item => item.Package)
-                .OrderBy(group => group.Key.Id, StringComparer.Ordinal)
-                .ThenBy(group => group.Key.Version, StringComparer.Ordinal)
-                .ToImmutableArray();
-            if (!packages.IsEmpty)
-            {
-                writer.WriteStartElement("ItemGroup");
-                foreach (var group in packages)
-                {
-                    var package = group.Key;
-                    writer.WriteStartElement("PackageReference");
-                    writer.WriteAttributeString("Include", package.Id);
-                    writer.WriteAttributeString("Version", package.Version);
-                    if (package.PrivateAssets) writer.WriteAttributeString("PrivateAssets", "all");
-                    if (VariantCondition(project, [.. group.Select(item => item.Variant).Distinct()]) is
-                        { } condition)
-                        writer.WriteAttributeString("Condition", condition);
-                    writer.WriteEndElement();
-                }
-                writer.WriteEndElement();
-            }
-
-            writer.WriteEndElement();
-        });
-    }
-
     private static string GenerateFilters(WorkspaceProject project, GenerationContext context)
     {
         return WriteXml(writer =>
@@ -428,39 +305,16 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator
             var dependencyProject = projectsById[dependency];
             writer.WriteStartElement(null, "ProjectReference", xmlNamespace);
             writer.WriteAttributeString("Include",
-                $"{ProjectFileStem(dependencyProject)}.{ProjectExtension(dependencyProject)}");
+                $"{ProjectFileStem(dependencyProject)}.vcxproj");
             if (VariantCondition(project, ReferenceVariants(project, dependency)) is { } condition)
                 writer.WriteAttributeString("Condition", condition);
             writer.WriteElementString(null, "Project", xmlNamespace,
                 $"{{{ProjectGuid(dependency).ToString().ToUpperInvariant()}}}");
-            if (dependencyProject.Language != project.Language)
-            {
-                writer.WriteElementString(null, "ReferenceOutputAssembly", xmlNamespace, "false");
-                writer.WriteElementString(null, "SkipGetTargetFrameworkProperties", xmlNamespace,
-                    "true");
-            }
-
-            if (project.Language == ModuleLanguage.Cxx && dependencyProject.Language == ModuleLanguage.Cxx)
-                writer.WriteElementString(null, "LinkLibraryDependencies", xmlNamespace, "false");
+            writer.WriteElementString(null, "LinkLibraryDependencies", xmlNamespace, "false");
             writer.WriteEndElement();
         }
 
         writer.WriteEndElement();
-    }
-
-    private static string GenerateDirectoryBuildProps(GenerationContext context)
-    {
-        return WriteXml(writer =>
-        {
-            writer.WriteStartElement("Project");
-            writer.WriteStartElement("PropertyGroup");
-            writer.WriteAttributeString("Condition", "'$(MSBuildProjectExtension)'=='.csproj'");
-            writer.WriteElementString("RoxyWorkspaceRoot", ToWindows(RelativeFromOutput(context, ".")));
-            writer.WriteElementString("BaseIntermediateOutputPath",
-                @"$(RoxyWorkspaceRoot)\intermediate\msbuild\$(MSBuildProjectName)\$(Configuration)\");
-            writer.WriteEndElement();
-            writer.WriteEndElement();
-        });
     }
 
     private static ImmutableArray<LogicalPath> Sources(WorkspaceProject project)
@@ -469,7 +323,8 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator
         [
             ..project.Variants
                 .SelectMany(variant => variant.Module.Sources)
-                .Distinct()
+                .GroupBy(source => source.Value, LogicalPath.FileSystemComparer)
+                .Select(group => group.OrderBy(source => source.Value, StringComparer.Ordinal).First())
                 .OrderBy(source => source.Value, StringComparer.Ordinal)
         ];
     }
@@ -478,14 +333,15 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator
     [
         .. project.Variants
             .SelectMany(variant => variant.Module.Sources.Select(source => (Variant: variant, Source: source)))
-            .GroupBy(item => item.Source)
+            .GroupBy(item => item.Source.Value, LogicalPath.FileSystemComparer)
             .Select(group => new SourceVariantGroup(
-                group.Key,
+                group.Select(item => item.Source).OrderBy(source => source.Value, StringComparer.Ordinal).First(),
                 [
                     .. group.Select(item => item.Variant).Distinct()
                         .OrderBy(variant => variant.Configuration)
                 ],
-                BuildPathLayout.StableToken(group.Key.Value)))
+                BuildPathLayout.StableToken(group.Select(item => item.Source.Value)
+                    .Order(StringComparer.Ordinal).First())))
             .OrderBy(group => group.Source.Value, StringComparer.Ordinal)
     ];
 
@@ -675,9 +531,6 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator
         _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, null),
     };
 
-    private static string ProjectExtension(WorkspaceProject project) =>
-        project.Language == ModuleLanguage.Cxx ? "vcxproj" : "csproj";
-
     private static string ProjectFileStem(WorkspaceProject project)
     {
         var name = project.Name.EndsWith("Module", StringComparison.Ordinal)
@@ -715,22 +568,6 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator
 
     private static string JoinCommandLine(IEnumerable<string> values, string inheritedValue) =>
         string.Join(' ', values.Append(inheritedValue));
-
-    private static ImmutableArray<string> TargetFrameworks(ConfiguredModule module) => module.TargetFrameworks
-        .DefaultIfEmpty("net10.0")
-        .Distinct(StringComparer.Ordinal)
-        .Order(StringComparer.Ordinal)
-        .ToImmutableArray();
-
-    private static void WriteTargetFrameworks(XmlWriter writer, ImmutableArray<string> frameworks) =>
-        writer.WriteElementString(frameworks.Length == 1 ? "TargetFramework" : "TargetFrameworks",
-            frameworks.Length == 1 ? frameworks[0] : string.Join(';', frameworks));
-
-    private static string ManagedOutputType(ConfiguredModule module) =>
-        module.Kind == ModuleKind.CSharpConsoleApplication ? "Exe" : "Library";
-
-    private static string ManagedRootNamespace(WorkspaceProject project, ConfiguredModule module) =>
-        module.RootNamespace ?? project.Name.Replace(' ', '.');
 
     private static string FormatLinkInput(string value)
     {
@@ -796,6 +633,7 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator
         Path.GetRelativePath(context.OutputDirectory.Value, logicalPath).Replace('\\', '/');
 
     private static string ToWindows(string path) => path.Replace('/', '\\');
+
     private static void StartMsBuild(XmlWriter writer, string name) =>
         writer.WriteStartElement(null, name, MsBuild);
 
@@ -846,7 +684,7 @@ public sealed class VisualStudioPlugin : IPlugin
 {
     public PluginId Id { get; } = new("Roxy.Generator.Vs2022");
     public Version Version { get; } = new(0, 1, 0);
-    public CapabilitySet Capabilities { get; } = new(["Workspace.Vs2022", "MixedWorkspace"]);
+    public CapabilitySet Capabilities { get; } = new(["Workspace.Vs2022", "NativeMsbuild"]);
 
     public void Register(IPluginRegistry registry)
     {

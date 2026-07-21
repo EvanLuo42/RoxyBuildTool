@@ -87,10 +87,32 @@ public sealed class FragmentRegistry
                         ?? throw new FragmentException(new Diagnostic("RBT1001", DiagnosticSeverity.Error,
                             $"Enum '{type.FullName}' must have [BuildFragment]."));
         var id = new FragmentId(attribute.Id);
-        var values = Enum.GetNames(type)
-            .Select(name => new FragmentValue(id, GetValueId(type.GetField(name)!)))
+        var fields = type.GetFields(BindingFlags.Public | BindingFlags.Static)
+            .OrderBy(field => field.MetadataToken)
+            .ToImmutableArray();
+        for (var left = 0; left < fields.Length; left++)
+        for (var right = left + 1; right < fields.Length; right++)
+        {
+            if (Equals(fields[left].GetRawConstantValue(), fields[right].GetRawConstantValue()))
+            {
+                throw new FragmentException(new Diagnostic("RBT1004", DiagnosticSeverity.Error,
+                    $"Fragment enum '{type.FullName}' contains aliases '{fields[left].Name}' and " +
+                    $"'{fields[right].Name}'. Fragment values must be one-to-one."));
+            }
+        }
+
+        var values = fields
+            .Select(field => new FragmentValue(id, GetValueId(field)))
             .Order()
             .ToImmutableArray();
+        var duplicateId = values.GroupBy(value => value.Value, StringComparer.Ordinal)
+            .FirstOrDefault(group => group.Count() > 1);
+        if (duplicateId is not null)
+        {
+            throw new FragmentException(new Diagnostic("RBT1004", DiagnosticSeverity.Error,
+                $"Fragment enum '{type.FullName}' maps multiple members to value ID '{duplicateId.Key}'."));
+        }
+
         var metadata = new FragmentMetadata(id, type, values);
 
         if (_metadata.TryGetValue(id, out var existing))

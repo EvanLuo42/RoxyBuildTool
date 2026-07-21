@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <Description>Visual Studio 2022 mixed C++ and C# workspace generator.</Description>
+    <Description>Visual Studio 2022 native C++ workspace generator.</Description>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../RoxyBuildTool.Abstractions/RoxyBuildTool.Abstractions.csproj" />

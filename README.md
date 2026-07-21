@@ -1,6 +1,6 @@
 # RoxyBuildTool
 
-RoxyBuildTool is a strongly typed, in-process build description system for C++ and .NET. A project-local C# host compiles build rules, resolves an immutable build model, and generates a mixed Visual Studio workspace and `compile_commands.json` from the same configuration graph.
+RoxyBuildTool is a strongly typed, in-process build description system for C++. A project-local C# host compiles build rules, resolves an immutable native build model, and generates a C++-only Visual Studio workspace and `compile_commands.json` from the same configuration graph.
 
 > RoxyBuildTool is under active development. Version 0.1 implements a Windows MVP; public APIs may change before 1.0.
 
@@ -9,10 +9,9 @@ RoxyBuildTool is a strongly typed, in-process build description system for C++ a
 - Ordinary C# build rules with IntelliSense, compile-time checking, and debugging.
 - C++ header-only, object, static library, shared library, and executable modules.
 - Native PCH, forced/system includes, output naming, and structured compiler/linker/librarian options.
-- C# class library and console application modules.
 - Typed configuration fragments, matrices, constraints, and canonical keys.
 - Explicit public, private, interface, build-order, and runtime dependency semantics.
-- Mixed C++/.NET Visual Studio solutions and compilation databases.
+- C++-only Visual Studio solutions and compilation databases.
 - Deterministic output, compare-before-write generation, manifests, and semantic action hashes.
 - Bounded parallel configuration resolution and incremental generation/action graph caches.
 - Versioned plugins with declared capabilities and compatibility validation before registration.

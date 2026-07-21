@@ -23,7 +23,6 @@ public sealed class IntegrationRulesModule : IRulesModule
         registry.AddModule<IntegrationNativeModule>();
         registry.AddModule<IntegrationOptionalModule>();
         registry.AddModule<IntegrationApplicationModule>();
-        registry.AddModule<IntegrationManagedModule>();
         registry.AddTarget<IntegrationTarget>();
         registry.AddWorkspace<IntegrationWorkspace>();
     }
@@ -48,6 +47,7 @@ public sealed class IntegrationNativeModule : CxxModule
         rules.Output = CxxOutput.SharedLibrary;
         rules.Sources.From(".", "**/*.cpp");
         rules.Sources.Exclude("excluded.cpp");
+        rules.Sources.Exclude("filtered/**");
         rules.Public.IncludeDirectories.Add("include");
         rules.Public.IncludeDirectories.Add("include");
         rules.Private.Defines.Add("INTEGRATION_NATIVE=1");
@@ -57,8 +57,11 @@ public sealed class IntegrationNativeModule : CxxModule
     }
 
     [Configure<IntegrationFlavor>("editor", Priority = 10)]
-    private static void ConfigureEditor(ModuleRules rules) =>
+    private static void ConfigureEditor(ModuleRules rules)
+    {
         rules.Private.Defines.Add("NATIVE_EDITOR=1");
+        rules.Sources.From("filtered", "**/*.cpp");
+    }
 }
 
 public sealed class IntegrationOptionalModule : CxxModule
@@ -87,34 +90,18 @@ public sealed class IntegrationApplicationModule : CxxModule
     }
 }
 
-public sealed class IntegrationManagedModule : CSharpModule
-{
-    [Configure]
-    private static void ConfigureModule(CSharpModuleRules rules)
-    {
-        rules.ManagedOutput = CSharpOutput.ConsoleApplication;
-        rules.TargetFrameworks.Add("net10.0");
-        rules.TargetFrameworks.Add("net10.0");
-        rules.Packages.Add("Example.Package", "1.2.3", privateAssets: true);
-        rules.Packages.Add("Example.Package", "1.2.3", privateAssets: true);
-        rules.RootNamespace = "Integration.Managed";
-        rules.Dependencies.Runtime<IntegrationNativeModule>();
-    }
-}
-
 public sealed class IntegrationTarget : BuildTarget
 {
     [Configure]
     private static void ConfigureTarget(TargetRules rules)
     {
         rules.RootModules.Add<IntegrationApplicationModule>();
-        rules.EntryModule<IntegrationManagedModule>();
         rules.RootModules.Add<IntegrationOptionalModule>();
         rules.Matrix
-            .Axis(RoxyBuildTool.Configuration.Platforms.Windows)
+            .Axis(Configuration.Platforms.Windows)
             .Axis(Architectures.X64)
             .Axis(BuildProfiles.Debug, BuildProfiles.Development, BuildProfiles.Shipping)
-            .Axis(RoxyBuildTool.Configuration.Toolchains.Msvc)
+            .Axis(Configuration.Toolchains.Msvc)
             .Axis(LinkModels.Modular)
             .Axis(IntegrationFlavor.Client, IntegrationFlavor.Editor)
             .Exclude(view => view.Is(IntegrationFlavor.Editor) && view.Is(BuildProfiles.Shipping),
@@ -130,7 +117,6 @@ public sealed class IntegrationWorkspace : BuildWorkspace
         rules.Targets.Add<IntegrationTarget>();
         rules.Targets.Add<IntegrationTarget>();
         rules.StartupTarget<IntegrationTarget>();
-        rules.IncludeBuildHost = false;
     }
 }
 
@@ -164,10 +150,10 @@ public sealed class CycleTarget : BuildTarget
     {
         rules.RootModules.Add<CycleAModule>();
         rules.Matrix
-            .Axis(RoxyBuildTool.Configuration.Platforms.Windows)
+            .Axis(Configuration.Platforms.Windows)
             .Axis(Architectures.X64)
             .Axis(BuildProfiles.Debug)
-            .Axis(RoxyBuildTool.Configuration.Toolchains.Msvc)
+            .Axis(Configuration.Toolchains.Msvc)
             .Axis(LinkModels.Modular);
     }
 }
@@ -178,6 +164,5 @@ public sealed class CycleWorkspace : BuildWorkspace
     private static void ConfigureWorkspace(WorkspaceRules rules)
     {
         rules.Targets.Add<CycleTarget>();
-        rules.IncludeBuildHost = false;
     }
 }

@@ -80,7 +80,8 @@ public static class DependencyResolver
                     moduleId, configuration.Canonical));
 
             if (definition.CxxSettings?.PrecompiledSource is { } precompiledSource &&
-                !definition.Sources.Contains(precompiledSource))
+                !definition.Sources.Any(source =>
+                    LogicalPath.FileSystemComparer.Equals(source.Value, precompiledSource.Value)))
                 diagnostics.Add(new Diagnostic("RBT2006", DiagnosticSeverity.Error,
                     $"Module '{moduleId}' precompiled source '{precompiledSource}' is not part of its source set.",
                     moduleId, configuration.Canonical));
@@ -98,7 +99,9 @@ public static class DependencyResolver
                 .Select(value => new UsageValue(value, $"{moduleId}:conditional"));
             privateUsage = privateUsage with { Defines = privateUsage.Defines.AddRange(conditionalDefines) };
             var compileUsage = publicUsage.Union(privateUsage);
-            var consumerUsage = publicUsage.Union(GetOwnLinkUsage(definition, target, configuration));
+            var consumerUsage = ExportedPublicRequirements(definition.Kind, publicUsage)
+                .Union(GetOwnLinkUsage(definition, target, configuration))
+                .Union(PrivateRequirementsCarriedBy(definition.Kind, privateUsage));
 
             foreach (var dependency in dependencies)
             {
@@ -115,17 +118,6 @@ public static class DependencyResolver
                     continue;
                 }
 
-                if (definition.Language != resolvedDependency.Language &&
-                    dependency.Visibility is not (DependencyVisibility.BuildOrderOnly or DependencyVisibility.Runtime))
-                {
-                    diagnostics.Add(new Diagnostic("RBT2004", DiagnosticSeverity.Error,
-                        $"Cross-language dependency '{moduleId}' -> '{dependency.Module}' cannot use " +
-                        $"visibility '{dependency.Visibility}'. Use Runtime for native runtime artifacts " +
-                        "or BuildOrderOnly for ordering.",
-                        moduleId, configuration.Canonical));
-                    continue;
-                }
-
                 if (dependency.Visibility is DependencyVisibility.Private or DependencyVisibility.Public)
                 {
                     compileUsage = compileUsage.Union(resolvedDependency.ConsumerUsage);
@@ -133,12 +125,23 @@ public static class DependencyResolver
 
                 switch (dependency.Visibility)
                 {
-                    case DependencyVisibility.Public or DependencyVisibility.Interface:
+                    case DependencyVisibility.Public:
+                        consumerUsage = consumerUsage.Union(ExportedPublicRequirements(
+                            definition.Kind,
+                            resolvedDependency.ConsumerUsage));
+                        break;
+                    case DependencyVisibility.Interface:
                         consumerUsage = consumerUsage.Union(resolvedDependency.ConsumerUsage);
                         break;
+                    case DependencyVisibility.Private:
+                        consumerUsage = consumerUsage.Union(PrivateRequirementsCarriedBy(
+                            definition.Kind,
+                            resolvedDependency.ConsumerUsage));
+                        break;
                     case DependencyVisibility.Runtime:
-                        compileUsage = compileUsage.Union(new UsageRequirements([], [], [],
-                            resolvedDependency.ConsumerUsage.RuntimeFiles));
+                        var runtime = RuntimeOnly(resolvedDependency.ConsumerUsage);
+                        compileUsage = compileUsage.Union(runtime);
+                        consumerUsage = consumerUsage.Union(runtime);
                         break;
                 }
             }
@@ -146,7 +149,6 @@ public static class DependencyResolver
             var result = new ConfiguredModule(
                 definition.Id,
                 definition.DisplayName,
-                definition.Language,
                 definition.Kind,
                 definition.Sources.OrderBy(source => source.Value, StringComparer.Ordinal).ToImmutableArray(),
                 publicUsage,
@@ -154,9 +156,6 @@ public static class DependencyResolver
                 compileUsage,
                 consumerUsage,
                 dependencies,
-                definition.TargetFrameworks,
-                definition.Packages,
-                definition.RootNamespace,
                 definition.CxxSettings);
             configured.Add(moduleId, result);
             stack.RemoveAt(stack.Count - 1);
@@ -196,6 +195,64 @@ public static class DependencyResolver
             _ => UsageRequirements.Empty,
         };
     }
+
+    private static UsageRequirements ExportedPublicRequirements(
+        ModuleKind consumerKind,
+        UsageRequirements usage)
+    {
+        // Object and resource files are implementation inputs once a real linker or librarian consumes
+        // them. Exporting them as well would make downstream links see the same object twice.
+        return AbsorbsObjectFiles(consumerKind)
+            ? WithoutObjectAndResourceInputs(usage)
+            : usage;
+    }
+
+    private static UsageRequirements PrivateRequirementsCarriedBy(
+        ModuleKind consumerKind,
+        UsageRequirements usage)
+    {
+        return consumerKind switch
+        {
+            // Static libraries cannot consume library link requirements. Object-library files are
+            // different: the librarian absorbs their object files into the archive, while any
+            // libraries needed by those objects still have to reach the eventual linker.
+            ModuleKind.StaticLibrary => WithoutObjectAndResourceInputs(LinkAndRuntimeOnly(usage)),
+
+            // Object and header-only libraries have no link step. Their eventual consumer must
+            // receive the complete private link/runtime closure, but not private compile settings.
+            ModuleKind.ObjectLibrary => LinkAndRuntimeOnly(usage),
+
+            // A shared library consumes link inputs itself, but its private DLL closure remains a
+            // runtime requirement of every executable that loads it.
+            ModuleKind.SharedLibrary => RuntimeOnly(usage),
+            _ => UsageRequirements.Empty,
+        };
+    }
+
+    private static bool AbsorbsObjectFiles(ModuleKind kind) => kind is
+        ModuleKind.StaticLibrary or ModuleKind.SharedLibrary or ModuleKind.Executable;
+
+    private static UsageRequirements LinkAndRuntimeOnly(UsageRequirements usage) => new(
+        [],
+        [],
+        usage.LinkInputs,
+        usage.RuntimeFiles);
+
+    private static UsageRequirements RuntimeOnly(UsageRequirements usage) => new(
+        [],
+        [],
+        [],
+        usage.RuntimeFiles);
+
+    private static UsageRequirements WithoutObjectAndResourceInputs(UsageRequirements usage) => usage with
+    {
+        LinkInputs =
+        [
+            .. usage.LinkInputs.Where(input =>
+                !input.Value.EndsWith(".obj", StringComparison.OrdinalIgnoreCase) &&
+                !input.Value.EndsWith(".res", StringComparison.OrdinalIgnoreCase))
+        ]
+    };
 
     private enum VisitState
     {

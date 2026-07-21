@@ -1,5 +1,4 @@
 using RoxyBuildTool.Abstractions;
-using RoxyBuildTool.Configuration;
 using RoxyBuildTool.Model;
 using Xunit;
 
@@ -17,6 +16,22 @@ public enum MissingFragmentMetadata
 {
     Value,
 }
+
+[BuildFragment("Custom.DuplicateId")]
+public enum DuplicateStableValue
+{
+    [FragmentValue("Same")] First,
+    [FragmentValue("same")] Second,
+}
+
+[BuildFragment("Custom.Alias")]
+#pragma warning disable CA1069 // Intentional alias used to verify registry validation.
+public enum AliasedValue
+{
+    First = 1,
+    Alias = 1,
+}
+#pragma warning restore CA1069
 
 public sealed class FragmentAndMatrixBoundaryTests
 {
@@ -56,7 +71,8 @@ public sealed class FragmentAndMatrixBoundaryTests
         Assert.Throws<ArgumentException>(() => new FragmentRegistry().RegisterEnum(typeof(string)));
 #pragma warning restore CA2263
 
-        var missing = Assert.Throws<FragmentException>(() => new FragmentRegistry().RegisterEnum<MissingFragmentMetadata>());
+        var missing =
+            Assert.Throws<FragmentException>(() => new FragmentRegistry().RegisterEnum<MissingFragmentMetadata>());
         Assert.Equal("RBT1001", missing.Diagnostic.Code);
 
         var registry = new FragmentRegistry();
@@ -66,6 +82,18 @@ public sealed class FragmentAndMatrixBoundaryTests
 
         var undefined = Assert.Throws<FragmentException>(() => new FragmentRegistry().Encode((CustomMode)999));
         Assert.Equal("RBT1003", undefined.Diagnostic.Code);
+    }
+
+    [Fact]
+    public void EnumRegistrationRejectsAliasesAndDuplicateStableIds()
+    {
+        var duplicateId = Assert.Throws<FragmentException>(() =>
+            new FragmentRegistry().RegisterEnum<DuplicateStableValue>());
+        var alias = Assert.Throws<FragmentException>(() =>
+            new FragmentRegistry().RegisterEnum<AliasedValue>());
+
+        Assert.Equal("RBT1004", duplicateId.Diagnostic.Code);
+        Assert.Equal("RBT1004", alias.Diagnostic.Code);
     }
 
     [Theory]
@@ -135,7 +163,8 @@ public sealed class FragmentAndMatrixBoundaryTests
             .Axis(BuildProfiles.Debug, BuildProfiles.Release)
             .Axis(LinkModels.Modular, LinkModels.Monolithic)
             .Exclude(view => view.Is(BuildProfiles.Shipping), "never")
-            .Require(view => view.Is(BuildProfiles.Release), view => view.Is(LinkModels.Monolithic), "release is monolithic")
+            .Require(view => view.Is(BuildProfiles.Release), view => view.Is(LinkModels.Monolithic),
+                "release is monolithic")
             .Build();
 
         var result = new MatrixResolver(new()).Resolve(matrix);
@@ -143,6 +172,20 @@ public sealed class FragmentAndMatrixBoundaryTests
         Assert.Equal(3, result.Configurations.Length);
         Assert.Single(result.Excluded);
         Assert.Contains(result.Configurations, key => key.Is(BuildProfiles.Debug) && key.Is(LinkModels.Modular));
+    }
+
+    [Fact]
+    public void ConstraintReferencesToMissingAxesAreDiagnosedAfterExpansion()
+    {
+        var matrix = new MatrixBuilder()
+            .Axis(BuildProfiles.Debug, BuildProfiles.Release)
+            .Exclude(view => view.Is(Platforms.Windows), "not Windows")
+            .Build();
+
+        var exception = Assert.Throws<FragmentException>(() => new MatrixResolver(new()).Resolve(matrix));
+
+        Assert.Equal("RBT1105", exception.Diagnostic.Code);
+        Assert.Contains("Platform", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]

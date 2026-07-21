@@ -25,8 +25,7 @@ public class IncrementalPipelineBenchmarks
         _definitions = BenchmarkModelFactory.CreateDefinitionGraph(
             250,
             24,
-            BenchmarkGraphShape.LayeredEngine,
-            false);
+            BenchmarkGraphShape.LayeredEngine);
         _target = _definitions.Targets[0];
         _configurations = BenchmarkModelFactory.CreateConfigurations(16);
 

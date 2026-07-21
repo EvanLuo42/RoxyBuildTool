@@ -125,6 +125,5 @@ internal sealed class SnapshotWorkspace : BuildWorkspace
     private static void ConfigureWorkspace(WorkspaceRules rules)
     {
         rules.Targets.Add<SnapshotTarget>();
-        rules.IncludeBuildHost = false;
     }
 }

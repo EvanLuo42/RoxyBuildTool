@@ -157,7 +157,6 @@ public sealed class InfrastructureTests
     public void RuleBaseTypesAreMarkersWithoutConfigureEntryPoints()
     {
         Assert.DoesNotContain(typeof(CxxModule).GetMethods(), method => method.Name == "Configure");
-        Assert.DoesNotContain(typeof(CSharpModule).GetMethods(), method => method.Name == "Configure");
         Assert.DoesNotContain(typeof(BuildTarget).GetMethods(), method => method.Name == "Configure");
         Assert.DoesNotContain(typeof(BuildWorkspace).GetMethods(), method => method.Name == "Configure");
     }
@@ -217,11 +216,11 @@ public sealed class InfrastructureTests
             new(new("toolchain"), "Msvc14.4"),
             new(new("LinkModel"), "modular"),
         ]);
-        var module = new ConfiguredModule("native", "Native", ModuleLanguage.Cxx, ModuleKind.StaticLibrary,
+        var module = new ConfiguredModule("native", "Native", ModuleKind.StaticLibrary,
             [new("src/native.cpp")], UsageRequirements.Empty, UsageRequirements.Empty,
-            UsageRequirements.Empty, UsageRequirements.Empty, [], [], []);
+            UsageRequirements.Empty, UsageRequirements.Empty, []);
         var model = new WorkspaceModel("Xml", "native",
-            [new("native", "Native", ModuleLanguage.Cxx, [new("native", configuration, module)], [])],
+            [new("native", "Native", [new("native", configuration, module)], [])],
             [new(configuration, new("native", "Native", ["native"]), [module], [])],
             []);
 
@@ -332,7 +331,6 @@ public sealed class CacheProbeWorkspace : BuildWorkspace
     {
         rules.Targets.Add<CacheProbeTarget>();
         rules.StartupTarget<CacheProbeTarget>();
-        rules.IncludeBuildHost = false;
     }
 }
 
@@ -402,7 +400,6 @@ public sealed class UnsupportedLinkWorkspace : BuildWorkspace
     private static void Configure(WorkspaceRules rules)
     {
         rules.Targets.Add<UnsupportedLinkTarget>();
-        rules.IncludeBuildHost = false;
     }
 }
 
@@ -460,6 +457,5 @@ public sealed class ReflectedWorkspace : BuildWorkspace
     {
         rules.Targets.Add<ReflectedTarget>();
         rules.StartupTarget<ReflectedTarget>();
-        rules.IncludeBuildHost = false;
     }
 }

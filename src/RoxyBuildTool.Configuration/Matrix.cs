@@ -45,7 +45,7 @@ public sealed class MatrixBuilder
     /// <summary>Creates an immutable matrix definition.</summary>
     public MatrixDefinition Build()
     {
-        return new MatrixDefinition([.._axes], [.._constraints]);
+        return new MatrixDefinition([.. _axes], [.. _constraints]);
     }
 
     private void AddAxis(FragmentValue[] values, Type? enumType)
@@ -68,7 +68,7 @@ public sealed class MatrixBuilder
                 $"Matrix contains duplicate axis '{fragment}'."));
         }
 
-        _axes.Add(new MatrixAxis(fragment, [..values.Distinct().Order()], enumType));
+        _axes.Add(new MatrixAxis(fragment, [.. values.Distinct().Order()], enumType));
     }
 }
 
@@ -155,13 +155,22 @@ public sealed class MatrixResolver(FragmentRegistry registry)
         var excluded = ImmutableArray.CreateBuilder<ExcludedConfiguration>();
         var candidates = 0;
         Expand(0, new Dictionary<FragmentId, FragmentValue>());
-        return new MatrixResolution([..completed.Order()], excluded.ToImmutable(), candidates);
+        return new MatrixResolution([.. completed.Order()], excluded.ToImmutable(), candidates);
 
         void Expand(int axisIndex, Dictionary<FragmentId, FragmentValue> assigned)
         {
             if (axisIndex == selectedAxes.Count)
             {
-                completed.Add(new ConfigurationKey(assigned.Values));
+                var rejection = EvaluateConstraints(matrix.Constraints, assigned, allowIncomplete: false);
+                if (rejection is null)
+                {
+                    completed.Add(new ConfigurationKey(assigned.Values));
+                }
+                else
+                {
+                    excluded.Add(new(string.Join(';', assigned.Values.Order()), rejection));
+                }
+
                 return;
             }
 
@@ -170,7 +179,9 @@ public sealed class MatrixResolver(FragmentRegistry registry)
             {
                 candidates++;
                 assigned.Add(axis.Fragment, value);
-                var rejection = EvaluateConstraints(matrix.Constraints, assigned);
+                var rejection = axisIndex + 1 == selectedAxes.Count
+                    ? null
+                    : EvaluateConstraints(matrix.Constraints, assigned, allowIncomplete: true);
                 if (rejection is null)
                 {
                     Expand(axisIndex + 1, assigned);
@@ -189,7 +200,8 @@ public sealed class MatrixResolver(FragmentRegistry registry)
 
     private static string? EvaluateConstraints(
         ImmutableArray<MatrixConstraint> constraints,
-        IReadOnlyDictionary<FragmentId, FragmentValue> assigned)
+        IReadOnlyDictionary<FragmentId, FragmentValue> assigned,
+        bool allowIncomplete)
     {
         var view = new ConfigurationView(assigned);
         foreach (var constraint in constraints)
@@ -201,9 +213,16 @@ public sealed class MatrixResolver(FragmentRegistry registry)
                     return constraint.Reason;
                 }
             }
-            catch (IncompleteConfigurationException)
+            catch (IncompleteConfigurationException) when (allowIncomplete)
             {
                 // This constraint will be retried after another axis has been assigned.
+            }
+            catch (IncompleteConfigurationException exception)
+            {
+                throw new FragmentException(new Diagnostic(
+                    "RBT1105",
+                    DiagnosticSeverity.Error,
+                    $"Matrix constraint references fragment '{exception.Fragment}', which is not an axis of this matrix."));
             }
         }
 

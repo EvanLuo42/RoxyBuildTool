@@ -264,6 +264,42 @@ public sealed class ValueObjectTests
     }
 
     [Fact]
+    public void ActionGraphOutputIdentityMatchesTheHostFileSystem()
+    {
+        var first = Action("first", ["One"]) with { Outputs = ["out/file.obj"] };
+        var second = Action("second", ["Two"]) with { Outputs = ["OUT/FILE.OBJ"] };
+
+        var diagnostics = new ActionGraph(new([]), "target", [first, second], []).Validate();
+
+        Assert.Equal(
+            OperatingSystem.IsWindows(),
+            diagnostics.Any(diagnostic => diagnostic.Code == "RBT3002"));
+    }
+
+    [Fact]
+    public void UsagePathIdentityMatchesTheHostFileSystemWithoutChangingDefineIdentity()
+    {
+        var first = new UsageRequirements(
+            [new("include/path", "first")],
+            [new("FEATURE", "first")],
+            [new("lib/value.lib", "first")],
+            [new("bin/value.dll", "first")]);
+        var second = new UsageRequirements(
+            [new("INCLUDE/PATH", "second")],
+            [new("feature", "second")],
+            [new("LIB/VALUE.LIB", "second")],
+            [new("BIN/VALUE.DLL", "second")]);
+
+        var combined = first.Union(second);
+        var expectedPathCount = OperatingSystem.IsWindows() ? 1 : 2;
+
+        Assert.Equal(expectedPathCount, combined.IncludeDirectories.Length);
+        Assert.Equal(expectedPathCount, combined.LinkInputs.Length);
+        Assert.Equal(expectedPathCount, combined.RuntimeFiles.Length);
+        Assert.Equal(2, combined.Defines.Length);
+    }
+
+    [Fact]
     public void ActionGraphValidationRejectsNonCanonicalAndEscapingOutputs()
     {
         var alias = Action("alias", ["One"]) with { Outputs = ["out\\./file.obj"] };
@@ -303,8 +339,8 @@ public sealed class ValueObjectTests
     }
 
     private static ConfiguredModule Module(string id) => new(
-        id, id, ModuleLanguage.Cxx, ModuleKind.HeaderOnly, [], UsageRequirements.Empty, UsageRequirements.Empty,
-        UsageRequirements.Empty, UsageRequirements.Empty, [], [], []);
+        id, id, ModuleKind.HeaderOnly, [], UsageRequirements.Empty, UsageRequirements.Empty,
+        UsageRequirements.Empty, UsageRequirements.Empty, []);
 
     private static BuildAction Action(string id, ImmutableArray<string> arguments) => new(
         id, BuildActionKind.Compile, "compiler", arguments, new LogicalPath("."), ["source.cpp"], ["output.obj"], [],

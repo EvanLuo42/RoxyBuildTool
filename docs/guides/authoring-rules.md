@@ -102,28 +102,6 @@ rules.Cxx.OutputName = "RuntimeCore";
 `PrecompiledHeader` and `PrecompiledSource` must be set together, and the PCH source must be in
 the module's resolved source set. `OutputName` is an extensionless file stem.
 
-## C# modules
-
-Derive from `CSharpModule` and configure `CSharpModuleRules`:
-
-```csharp
-public sealed class ManagedToolModule : CSharpModule
-{
-    [Configure]
-    private static void ConfigureAll(CSharpModuleRules rules)
-    {
-        rules.ManagedOutput = CSharpOutput.ConsoleApplication;
-        rules.Sources.From("Managed/Tool", "**/*.cs");
-        rules.Sources.Exclude("**/*.Module.cs");
-        rules.TargetFrameworks.Add("net10.0");
-        rules.Packages.Add("System.CommandLine", "2.0.0");
-        rules.RootNamespace = "Example.Managed.Tool";
-    }
-}
-```
-
-The default target framework is `net10.0`. Package references are emitted into generated SDK-style projects.
-
 ## Dependencies
 
 Dependencies are strongly typed:
@@ -143,9 +121,7 @@ rules.Dependencies.Runtime<EngineRuntimeModule>();
 | `Runtime` | Runtime files only | No | Yes | Yes |
 
 Dependency cycles and references to missing or disabled modules produce diagnostics during graph resolution.
-Compile/interface usage cannot cross the C++/C# language boundary implicitly. Cross-language
-edges must be `Runtime` (for example, a native DLL loaded through P/Invoke) or `BuildOrderOnly`.
-RoxyBuildTool does not model or advertise a C++/CLI toolchain.
+RoxyBuildTool models native C++ modules only and does not support C++/CLI.
 
 ## Custom fragments
 
@@ -232,10 +208,6 @@ public sealed class GameWorkspace : BuildWorkspace
         rules.Targets.Add<GameTarget>();
         rules.Targets.Add<EditorTarget>();
         rules.StartupTarget<EditorTarget>();
-        rules.IncludeBuildHost = true;
-        rules.BuildHostProject = "Build/RoxyBuild.csproj";
     }
 }
 ```
-
-Including the build host adds it to the generated mixed solution as an imported C# project. Disable `IncludeBuildHost` when the host must remain outside the workspace.

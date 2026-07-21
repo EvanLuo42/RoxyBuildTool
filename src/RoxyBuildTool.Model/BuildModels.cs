@@ -316,6 +316,11 @@ public readonly record struct LogicalPath
             Value = ".";
     }
 
+    /// <summary>Compares paths using the identity rules of the host file system.</summary>
+    public static StringComparer FileSystemComparer { get; } = OperatingSystem.IsWindows()
+        ? StringComparer.OrdinalIgnoreCase
+        : StringComparer.Ordinal;
+
     public string Value { get; }
     public string FileName => Path.GetFileName(Value);
     public override string ToString() => Value;
@@ -359,13 +364,6 @@ public static class BuildFileKinds
     }
 }
 
-/// <summary>Identifies the implementation language of a configured module.</summary>
-public enum ModuleLanguage
-{
-    Cxx,
-    CSharp,
-}
-
 /// <summary>Identifies the artifact shape of a configured module.</summary>
 public enum ModuleKind
 {
@@ -374,8 +372,6 @@ public enum ModuleKind
     StaticLibrary,
     SharedLibrary,
     Executable,
-    CSharpClassLibrary,
-    CSharpConsoleApplication,
 }
 
 /// <summary>Defines how a module dependency affects compilation, consumers, runtime files, and ordering.</summary>
@@ -390,9 +386,6 @@ public enum DependencyVisibility
 
 /// <summary>Connects a module to a dependency with explicit propagation semantics.</summary>
 public sealed record DependencyEdge(string Module, DependencyVisibility Visibility);
-
-/// <summary>Describes a NuGet package reference emitted into a generated managed project.</summary>
-public sealed record PackageReferenceModel(string Id, string Version, bool PrivateAssets = false);
 
 /// <summary>Associates a propagated usage value with the definition that introduced it.</summary>
 public sealed record UsageValue(string Value, string Origin);
@@ -409,23 +402,29 @@ public sealed record UsageRequirements(
 
     /// <summary>Combines requirements by value using deterministic origin selection.</summary>
     public UsageRequirements Union(UsageRequirements other) => new(
-        Normalize(IncludeDirectories.AddRange(other.IncludeDirectories)),
-        Normalize(Defines.AddRange(other.Defines)),
-        Normalize(LinkInputs.AddRange(other.LinkInputs)),
-        Normalize(Values(RuntimeFiles).AddRange(Values(other.RuntimeFiles))),
-        Normalize(Values(SystemIncludeDirectories).AddRange(Values(other.SystemIncludeDirectories))));
+        Normalize(IncludeDirectories.AddRange(other.IncludeDirectories), LogicalPath.FileSystemComparer),
+        Normalize(Defines.AddRange(other.Defines), StringComparer.Ordinal),
+        Normalize(LinkInputs.AddRange(other.LinkInputs), LogicalPath.FileSystemComparer),
+        Normalize(Values(RuntimeFiles).AddRange(Values(other.RuntimeFiles)), LogicalPath.FileSystemComparer),
+        Normalize(Values(SystemIncludeDirectories).AddRange(Values(other.SystemIncludeDirectories)),
+            LogicalPath.FileSystemComparer));
 
     private static ImmutableArray<UsageValue> Values(ImmutableArray<UsageValue> values)
     {
         return values.IsDefault ? [] : values;
     }
 
-    private static ImmutableArray<UsageValue> Normalize(IEnumerable<UsageValue> values) => values
-        .GroupBy(value => value.Value, StringComparer.Ordinal)
-        .Select(group => group.OrderBy(value => value.Origin, StringComparer.Ordinal).First())
-        .OrderBy(value => value.Value, StringComparer.Ordinal)
-        .ThenBy(value => value.Origin, StringComparer.Ordinal)
-        .ToImmutableArray();
+    private static ImmutableArray<UsageValue> Normalize(
+        IEnumerable<UsageValue> values,
+        StringComparer comparer)
+    {
+        return values
+            .GroupBy(value => value.Value, comparer)
+            .Select(group => group.OrderBy(value => value.Origin, StringComparer.Ordinal).First())
+            .OrderBy(value => value.Value, StringComparer.Ordinal)
+            .ThenBy(value => value.Origin, StringComparer.Ordinal)
+            .ToImmutableArray();
+    }
 }
 
 /// <summary>Contains native settings that are not dependency usage requirements.</summary>
@@ -445,7 +444,6 @@ public sealed record CxxModuleSettings(
 public sealed record ConfiguredModule(
     string Id,
     string DisplayName,
-    ModuleLanguage Language,
     ModuleKind Kind,
     ImmutableArray<LogicalPath> Sources,
     UsageRequirements PublicUsage,
@@ -453,9 +451,6 @@ public sealed record ConfiguredModule(
     UsageRequirements CompileUsage,
     UsageRequirements ConsumerUsage,
     ImmutableArray<DependencyEdge> Dependencies,
-    ImmutableArray<string> TargetFrameworks,
-    ImmutableArray<PackageReferenceModel> Packages,
-    string? RootNamespace = null,
     CxxModuleSettings? CxxSettings = null);
 
 /// <summary>Identifies the target and root modules of a configured graph.</summary>
@@ -485,7 +480,6 @@ public enum ArtifactKind
     SharedLibrary,
     Executable,
     GeneratedProject,
-    ManagedAssembly,
     RuntimeFile,
     PrecompiledHeader
 }
@@ -501,8 +495,6 @@ public enum BuildActionKind
     Archive,
     Link,
     Copy,
-    DotNetRestore,
-    DotNetBuild,
 }
 
 /// <summary>Provides allocation-free traversal over shared and action-specific argument segments.</summary>
@@ -716,7 +708,7 @@ public sealed record ActionGraph(
                 $"Action ID '{duplicate.Key}' is declared {duplicate.Count()} times."));
 
         foreach (var duplicate in Actions.SelectMany(action => action.Outputs.Select(output => (output, action.Id)))
-                     .GroupBy(pair => pair.output, StringComparer.Ordinal).Where(group => group.Count() > 1))
+                     .GroupBy(pair => pair.output, LogicalPath.FileSystemComparer).Where(group => group.Count() > 1))
         {
             diagnostics.Add(new Diagnostic("RBT3002", DiagnosticSeverity.Error,
                 $"Output '{duplicate.Key}' has multiple producers: {string.Join(", ", duplicate.Select(pair => pair.Id))}."));
@@ -754,7 +746,7 @@ public sealed record ActionGraph(
             if (!actionsById.TryGetValue(artifact.ProducerAction, out var producer))
                 diagnostics.Add(new Diagnostic("RBT3004", DiagnosticSeverity.Error,
                     $"Artifact '{artifact.Id}' references missing producer '{artifact.ProducerAction}'."));
-            else if (!producer.Outputs.Contains(artifact.Path.Value, StringComparer.Ordinal))
+            else if (!producer.Outputs.Contains(artifact.Path.Value, LogicalPath.FileSystemComparer))
                 diagnostics.Add(new Diagnostic("RBT3005", DiagnosticSeverity.Error,
                     $"Artifact '{artifact.Id}' path '{artifact.Path}' is not declared by producer '{producer.Id}'."));
 
@@ -813,11 +805,8 @@ public sealed record WorkspaceProjectDependencyVariant(
 public sealed record WorkspaceProject(
     string Id,
     string Name,
-    ModuleLanguage Language,
     ImmutableArray<WorkspaceProjectVariant> Variants,
     ImmutableArray<string> ProjectDependencies,
-    bool IsBuildHost = false,
-    LogicalPath? ImportedProject = null,
     ImmutableArray<WorkspaceProjectDependencyVariant> DependencyVariants = default);
 
 /// <summary>Contains the generator-neutral representation of a complete workspace.</summary>
@@ -851,4 +840,16 @@ public interface IWorkspaceGenerator
 
     /// <summary>Generates files for <paramref name="workspace"/>.</summary>
     GenerationResult Generate(WorkspaceModel workspace, GenerationContext context);
+}
+
+/// <summary>
+///     Declares additional external input identity required before a workspace generator may use a generation snapshot.
+/// </summary>
+public interface IWorkspaceGeneratorFingerprintProvider
+{
+    /// <summary>
+    ///     Returns a deterministic identity for inputs not already represented by the workspace model, context, or
+    ///     generator assembly. Pure generators should return an empty string.
+    /// </summary>
+    string GetAdditionalFingerprint(WorkspaceModel workspace, GenerationContext context);
 }

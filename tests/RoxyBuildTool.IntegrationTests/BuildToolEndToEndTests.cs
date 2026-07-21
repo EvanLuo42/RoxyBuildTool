@@ -25,15 +25,15 @@ public sealed class BuildToolEndToEndTests
         Assert.Contains("write .roxy", firstOutput.ToString(), StringComparison.Ordinal);
         var solution = workspace.File(".roxy/generated/vs2022/integration/IntegrationWorkspace.sln");
         var nativeProject = workspace.File(".roxy/generated/vs2022/integration/IntegrationNative.Integration.vcxproj");
-        var managedProject = workspace.File(".roxy/generated/vs2022/integration/IntegrationManaged.Integration.csproj");
         var commands = workspace.File(".roxy/generated/CompileDb/integration/compile_commands.json");
         Assert.Contains("Development Editor-", solution, StringComparison.Ordinal);
         Assert.Contains("keep.cpp", nativeProject, StringComparison.Ordinal);
         Assert.Contains("nested.cpp", nativeProject, StringComparison.Ordinal);
         Assert.DoesNotContain("excluded.cpp", nativeProject, StringComparison.Ordinal);
         Assert.Contains("NATIVE_EDITOR=1", nativeProject, StringComparison.Ordinal);
-        Assert.Contains("Example.Package", managedProject, StringComparison.Ordinal);
         Assert.Contains("keep.cpp", commands, StringComparison.Ordinal);
+        Assert.Empty(Directory.GetFiles(Path.Combine(workspace.Path, ".roxy", "generated", "vs2022", "integration"),
+            "*.csproj"));
 
         var manifestPath =
             Assert.Single(Directory.GetFiles(Path.Combine(workspace.Path, ".roxy", "manifests"), "*.json"));
@@ -107,6 +107,15 @@ public sealed class BuildToolEndToEndTests
         Assert.Contains("added.cpp", nativeProject, StringComparison.Ordinal);
         Assert.True(Directory.GetFiles(Path.Combine(cacheRoot, "actions"), "*.bin").Length >
                     actions.Length);
+
+        File.WriteAllText(
+            Path.Combine(workspace.Path, "filtered", "filtered-added.cpp"),
+            "int filtered_added() { return 5; }");
+        Assert.Equal(0, await App([], workspace.Path, new StringWriter())
+            .RunAsync(TestContext.Current.CancellationToken));
+        Assert.Contains("filtered-added.cpp", workspace.File(
+                ".roxy/generated/vs2022/integration/IntegrationNative.Integration.vcxproj"),
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -116,13 +125,10 @@ public sealed class BuildToolEndToEndTests
         var module = new ModuleDefinition(
             "module",
             "Module",
-            ModuleLanguage.Cxx,
             ModuleKind.StaticLibrary,
             [],
             usage,
             usage,
-            [],
-            [],
             [],
             []);
         var target = new TargetDefinition("target", "Target", [module.Id], new MatrixBuilder().Build());
@@ -432,10 +438,13 @@ public sealed class BuildToolEndToEndTests
             Directory.CreateDirectory(System.IO.Path.Combine(path, "include"));
             Directory.CreateDirectory(System.IO.Path.Combine(path, "external"));
             Directory.CreateDirectory(System.IO.Path.Combine(path, "nested"));
+            Directory.CreateDirectory(System.IO.Path.Combine(path, "filtered"));
             System.IO.File.WriteAllText(System.IO.Path.Combine(path, "keep.cpp"), "int keep() { return 1; }");
             System.IO.File.WriteAllText(System.IO.Path.Combine(path, "nested", "nested.cpp"),
                 "int nested() { return 2; }");
             System.IO.File.WriteAllText(System.IO.Path.Combine(path, "excluded.cpp"), "int excluded() { return 0; }");
+            System.IO.File.WriteAllText(System.IO.Path.Combine(path, "filtered", "initial.cpp"),
+                "int filtered_initial() { return 4; }");
             return new(path);
         }
 

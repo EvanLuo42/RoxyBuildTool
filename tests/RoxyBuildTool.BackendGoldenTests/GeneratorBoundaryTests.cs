@@ -167,70 +167,6 @@ public sealed class GeneratorBoundaryTests
     }
 
     [Fact]
-    public void ManagedGenerationCoversDefaultsPackagesVariantsAndDirectoryProps()
-    {
-        var debug = Configuration(BuildProfiles.Debug);
-        var shipping = Configuration(BuildProfiles.Shipping);
-        var debugModule = Managed("library", "Managed Library", ModuleKind.CSharpClassLibrary, debug,
-                [], [
-                    new PackageReferenceModel("Private.Package", "2.0.0", true),
-                    new PackageReferenceModel("Public.Package", "1.0.0")
-                ]) with
-            {
-                CompileUsage =
-                new UsageRequirements([], [], [], [new UsageValue("$(VendorRoot)/bin/runtime.dll", "test")])
-            };
-        var shippingModule = debugModule with
-        {
-            Sources = [new("managed/Library.cs"), new("managed/Shipping.cs")],
-            Packages = [new("Public.Package", "1.0.0")],
-            TargetFrameworks = ["net9.0"],
-            Kind = ModuleKind.CSharpConsoleApplication,
-            RootNamespace = "Managed.Shipping",
-            CompileUsage = UsageRequirements.Empty
-        };
-        var project = new WorkspaceProject("library", "Managed Library", ModuleLanguage.CSharp,
-            [new("app", debug, debugModule), new("app", shipping, shippingModule)], []);
-        var result = Generator().Generate(new("Managed", "app", [project], [], []), Context("ManagedDefaults"));
-
-        var document = Parse(result, "ManagedLibrary.csproj");
-
-        Assert.Equal(["Library", "Exe"], document.Descendants("OutputType").Select(element => element.Value));
-        var targetFrameworks = document.Descendants("TargetFramework").ToArray();
-        Assert.Equal(["net10.0", "net9.0"], targetFrameworks.Select(element => element.Value));
-        Assert.All(targetFrameworks, element => Assert.NotNull(element.Parent?.Attribute("Condition")));
-        Assert.Equal(["Managed.Library", "Managed.Shipping"],
-            document.Descendants("RootNamespace").Select(element => element.Value));
-        Assert.All(document.Descendants("OutputType"),
-            element => Assert.NotNull(element.Parent?.Attribute("Condition")));
-        Assert.All(document.Descendants("RootNamespace"),
-            element => Assert.NotNull(element.Parent?.Attribute("Condition")));
-        Assert.Equal(["Library.cs", "Shipping.cs"], document.Descendants("Compile")
-            .Select(element => Path.GetFileName((string)element.Attribute("Include")!)));
-        var runtime = Assert.Single(document.Descendants("Content"));
-        Assert.Equal("$(VendorRoot)\\bin\\runtime.dll", runtime.Attribute("Include")?.Value);
-        Assert.Equal(Condition(debug), runtime.Parent?.Attribute("Condition")?.Value);
-        var packages = document.Descendants("PackageReference").ToDictionary(
-            element => (string)element.Attribute("Include")!, StringComparer.Ordinal);
-        Assert.Equal("all", (string?)packages["Private.Package"].Attribute("PrivateAssets"));
-        Assert.Null(packages["Public.Package"].Attribute("PrivateAssets"));
-        Assert.Equal(2, packages.Count);
-        Assert.Equal(Condition(debug), (string?)packages["Private.Package"].Attribute("Condition"));
-        var shippingSource = document.Descendants("Compile")
-            .Single(element =>
-                ((string?)element.Attribute("Include"))?.EndsWith("Shipping.cs", StringComparison.Ordinal) == true);
-        Assert.Equal(Condition(shipping), (string?)shippingSource.Attribute("Condition"));
-        Assert.Contains(document.Descendants("Optimize"), element => element.Value == "false");
-        Assert.Contains(document.Descendants("Optimize"), element => element.Value == "true");
-
-        var props = Parse(result, "Directory.Build.props");
-        Assert.Contains("intermediate\\msbuild", Assert.Single(props.Descendants("BaseIntermediateOutputPath")).Value,
-            StringComparison.Ordinal);
-        Assert.Contains("$(Configuration)", Assert.Single(props.Descendants("BaseIntermediateOutputPath")).Value,
-            StringComparison.Ordinal);
-    }
-
-    [Fact]
     public void NativeGenerationKeepsConditionalReferencesAndToolchainPolicyPerVariant()
     {
         var debug = Configuration(BuildProfiles.Debug);
@@ -242,7 +178,7 @@ public sealed class GeneratorBoundaryTests
         };
         var releaseApplication = debugApplication with { Dependencies = [] };
         var applicationProject = new WorkspaceProject(
-            "application", "Application", ModuleLanguage.Cxx,
+            "application", "Application",
             [new("app", debug, debugApplication), new("app", release, releaseApplication)],
             ["library"],
             DependencyVariants: [new("app", debug, "library")]);
@@ -272,24 +208,6 @@ public sealed class GeneratorBoundaryTests
     }
 
     [Fact]
-    public void SolutionIncludesImportedBuildHostAndExplicitDependencySection()
-    {
-        var configuration = Configuration(BuildProfiles.Development);
-        var module = Module("native", "Native", ModuleKind.StaticLibrary, ["native.cpp"]);
-        var project = Project("native", "Native", [new("app", configuration, module)], ["BuildRules"]);
-        var host = new WorkspaceProject("BuildRules", "Build Rules", ModuleLanguage.CSharp, [], [], true,
-            new("Build/RoxyBuild.csproj"));
-
-        var result = Generator().Generate(new("Hosted", "app", [project, host], [], []), Context("hosted"));
-        var solution = File(result, "Hosted.sln");
-
-        Assert.Contains("..\\..\\..\\..\\Build\\RoxyBuild.csproj", solution, StringComparison.Ordinal);
-        Assert.Contains("ProjectSection(ProjectDependencies)", solution, StringComparison.Ordinal);
-        Assert.Contains("Debug|Any CPU", solution, StringComparison.Ordinal);
-        Assert.DoesNotContain(".Build.0 = Debug|Any CPU", solution, StringComparison.Ordinal);
-    }
-
-    [Fact]
     public void ProjectFileNamesAreSanitizedWithFallbackAndModuleSuffixRemoval()
     {
         var configuration = Configuration(BuildProfiles.Development);
@@ -306,14 +224,9 @@ public sealed class GeneratorBoundaryTests
     }
 
     [Fact]
-    public void InvalidNativeKindAndUnknownProjectDependencyFailFast()
+    public void UnknownProjectDependencyFailsFast()
     {
         var configuration = Configuration(BuildProfiles.Development);
-        var invalid = Module("invalid", "Invalid", ModuleKind.CSharpClassLibrary, ["invalid.cpp"]);
-        Assert.Throws<ArgumentOutOfRangeException>(() => Generator().Generate(
-            new("Invalid", "target", [Project("invalid", "Invalid", [new("target", configuration, invalid)])], [], []),
-            Context("invalid")));
-
         var valid = Module("valid", "Valid", ModuleKind.StaticLibrary, ["valid.cpp"]);
         Assert.Throws<KeyNotFoundException>(() => Generator().Generate(
             new("Missing", "target", [Project("valid", "Valid", [new("target", configuration, valid)], ["missing"])],
@@ -383,7 +296,7 @@ public sealed class GeneratorBoundaryTests
             plugin => Assert.IsType<CompilationDatabasePlugin>(plugin));
 
         Assert.Equal("Vs2022", new VisualStudio2022Generator().Id.Value);
-        Assert.True(new VisualStudio2022Generator().Capabilities.Contains("MixedWorkspace"));
+        Assert.True(new VisualStudio2022Generator().Capabilities.Contains("NativeMsbuild"));
         Assert.Equal("CompileDb", new CompilationDatabaseGenerator().Id.Value);
         Assert.True(new CompilationDatabaseGenerator().Capabilities.Contains("ArgumentsArray"));
     }
@@ -406,27 +319,16 @@ public sealed class GeneratorBoundaryTests
         string name,
         ModuleKind kind,
         ImmutableArray<string> sources) => new(
-        id, name, ModuleLanguage.Cxx, kind, sources.Select(path => new LogicalPath(path)).ToImmutableArray(),
+        id, name, kind, sources.Select(path => new LogicalPath(path)).ToImmutableArray(),
         UsageRequirements.Empty, UsageRequirements.Empty, UsageRequirements.Empty, UsageRequirements.Empty,
-        [], [], []);
-
-    private static ConfiguredModule Managed(
-        string id,
-        string name,
-        ModuleKind kind,
-        ConfigurationKey configuration,
-        ImmutableArray<string> targetFrameworks,
-        ImmutableArray<PackageReferenceModel> packages) => new(
-        id, name, ModuleLanguage.CSharp, kind, [new("managed/Library.cs")],
-        UsageRequirements.Empty, UsageRequirements.Empty, UsageRequirements.Empty, UsageRequirements.Empty,
-        [], targetFrameworks, packages);
+        []);
 
     private static WorkspaceProject Project(
         string id,
         string name,
         ImmutableArray<WorkspaceProjectVariant> variants,
         ImmutableArray<string> dependencies = default) => new(
-        id, name, ModuleLanguage.Cxx, variants, dependencies.IsDefault ? [] : dependencies);
+        id, name, variants, dependencies.IsDefault ? [] : dependencies);
 
     private static string ConfigurationType(GenerationResult result, string path) =>
         Assert.Single(Parse(result, path).Descendants(MsBuild + "ConfigurationType").Select(element => element.Value)

@@ -4,7 +4,6 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using RoxyBuildTool.Abstractions;
-using RoxyBuildTool.Configuration;
 using RoxyBuildTool.Graph;
 using RoxyBuildTool.Model;
 using RoxyBuildTool.Toolchains;
@@ -53,16 +52,12 @@ internal sealed class PipelineCache(string workspaceRoot)
             {
                 module.Id,
                 module.DisplayName,
-                module.Language,
                 module.Kind,
                 Sources = module.Sources.Select(source => source.Value),
                 module.PublicUsage,
                 module.PrivateUsage,
                 module.Dependencies,
-                module.TargetFrameworks,
-                module.Packages,
                 module.ConditionalRules,
-                module.RootNamespace,
                 module.CxxSettings,
             }),
         };
@@ -77,6 +72,13 @@ internal sealed class PipelineCache(string workspaceRoot)
         Resolver = typeof(DependencyResolver).Assembly.ManifestModule.ModuleVersionId,
         Definitions = definitionFingerprint,
         Configuration = configuration.Canonical,
+    });
+
+    public static string ResolvedGraphFingerprint(ConfiguredGraph graph) => Hash(new
+    {
+        SchemaVersion,
+        Resolver = typeof(DependencyResolver).Assembly.ManifestModule.ModuleVersionId,
+        Graph = graph,
     });
 
     public static string ActionGraphFingerprint(
@@ -95,38 +97,27 @@ internal sealed class PipelineCache(string workspaceRoot)
     }
 
     public static string GenerationFingerprint(
-        DefinitionGraph definitions,
         WorkspaceDefinition workspace,
+        WorkspaceModel model,
         IReadOnlyDictionary<FragmentId, string> selectors,
         ImmutableArray<string> generators,
         IEnumerable<string> generatorIdentities,
+        IEnumerable<string> generatorFingerprints,
         IEnumerable<string> pluginIdentities,
         IEnumerable<ToolchainDescriptor> toolchains)
     {
-        var registry = new FragmentRegistry();
-        var targets = workspace.Targets.Select(targetId => definitions.GetTarget(targetId))
-            .OrderBy(target => target.Id, StringComparer.Ordinal).ToImmutableArray();
-        var configurations = targets.SelectMany(target =>
-                new MatrixResolver(registry).Resolve(target.Matrix, selectors).Configurations)
-            .Select(configuration => configuration.Canonical)
-            .Distinct(StringComparer.Ordinal)
-            .Order(StringComparer.Ordinal);
         return Hash(new
         {
             SchemaVersion,
             Host = typeof(BuildToolApp).Assembly.ManifestModule.ModuleVersionId,
             Assembler = typeof(WorkspaceAssembler).Assembly.ManifestModule.ModuleVersionId,
             Workspace = workspace,
-            Targets = targets.Select(target => new
-            {
-                target.Id,
-                Fingerprint = DefinitionFingerprint(definitions, target)
-            }),
-            Configurations = configurations,
+            Model = model,
             Selectors = selectors.OrderBy(selector => selector.Key.Value, StringComparer.Ordinal)
                 .Select(selector => $"{selector.Key.Value}={selector.Value}"),
             Generators = generators.Order(StringComparer.Ordinal),
             GeneratorIdentities = generatorIdentities.Order(StringComparer.Ordinal),
+            GeneratorFingerprints = generatorFingerprints.Order(StringComparer.Ordinal),
             PluginIdentities = pluginIdentities.Order(StringComparer.Ordinal),
             Toolchains = toolchains.OrderBy(toolchain => toolchain.Id.Value, StringComparer.Ordinal)
         });
@@ -178,7 +169,7 @@ internal sealed class PipelineCache(string workspaceRoot)
         var temporary = $"{path}.{Guid.NewGuid():N}.tmp";
         try
         {
-            var cachedFiles = files.Distinct(StringComparer.Ordinal)
+            var cachedFiles = files.Distinct(LogicalPath.FileSystemComparer)
                 .Order(StringComparer.Ordinal)
                 .Select(relative => new GenerationSnapshotFile(
                     relative.Replace('\\', '/'),

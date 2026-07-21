@@ -61,12 +61,12 @@ Do not point `WithMsBuild` at the SDK-local `MSBuild.dll` for C++ builds. It doe
 Check that the type:
 
 - Is in an assembly passed to `DiscoverRulesFromAssemblyContaining<T>()`.
-- Derives from `CxxModule`, `CSharpModule`, `BuildTarget`, or `BuildWorkspace`.
+- Derives from `CxxModule`, `BuildTarget`, or `BuildWorkspace`.
 - Is concrete, non-generic, and has a public parameterless constructor.
 
 ## A `[Configure]` method fails validation
 
-The method must return `void` and accept exactly one rules parameter: `ModuleRules`, `CSharpModuleRules`, `TargetRules`, or `WorkspaceRules` as appropriate. Filtered configuration methods are valid only on modules.
+The method must return `void` and accept exactly one rules parameter: `ModuleRules`, `TargetRules`, or `WorkspaceRules` as appropriate. Filtered configuration methods are valid only on modules.
 
 ## Diagnostic codes
 

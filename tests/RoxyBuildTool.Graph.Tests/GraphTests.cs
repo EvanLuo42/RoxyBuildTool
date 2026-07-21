@@ -40,17 +40,13 @@ public sealed class GraphTests
             Module("runtime", ModuleKind.SharedLibrary, sources: ["src/runtime.cpp"]),
             Module("NativeApp", ModuleKind.Executable, sources: ["src/main.cpp"],
                 dependencies: [new DependencyEdge("runtime", DependencyVisibility.Private)]),
-            Module("ManagedApp", ModuleKind.CSharpConsoleApplication, ModuleLanguage.CSharp,
-                sources: ["managed/Program.cs"], dependencies: [new("runtime", DependencyVisibility.Runtime)]),
-        ], [Target("mixed", ["NativeApp", "ManagedApp"])], []);
+        ], [Target("native", ["NativeApp"])], []);
         var configured = DependencyResolver.Resolve(definitions, definitions.Targets[0], TestConfiguration());
 
-        var actions = ActionGraphLowerer.Lower(configured, Toolchain(), "MixedWorkspace");
+        var actions = ActionGraphLowerer.Lower(configured, Toolchain(), "NativeWorkspace");
 
         Assert.Contains(actions.Actions, action => action.Kind == BuildActionKind.Compile);
         Assert.Contains(actions.Actions, action => action.Kind == BuildActionKind.Link);
-        Assert.DoesNotContain(actions.Actions,
-            action => action.Kind is BuildActionKind.DotNetRestore or BuildActionKind.DotNetBuild);
         Assert.DoesNotContain(actions.Actions.SelectMany(action => action.Arguments),
             argument => argument.Contains(".roxy/generated/Vs2022", StringComparison.Ordinal));
         Assert.Empty(actions.Validate());
@@ -73,13 +69,11 @@ public sealed class GraphTests
     private static ModuleDefinition Module(
         string id,
         ModuleKind kind,
-        ModuleLanguage language = ModuleLanguage.Cxx,
         string[]? sources = null,
         string[]? publicIncludes = null,
         DependencyEdge[]? dependencies = null) => new(
         id,
         id,
-        language,
         kind,
         (sources ?? []).Select(source => new LogicalPath(source)).ToImmutableArray(),
         new UsageRequirements(
@@ -87,8 +81,6 @@ public sealed class GraphTests
             []),
         UsageRequirements.Empty,
         (dependencies ?? []).ToImmutableArray(),
-        language == ModuleLanguage.CSharp ? ["net10.0"] : [],
-        [],
         []);
 
     private static TargetDefinition Target(string id, string[] roots) => new(

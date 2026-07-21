@@ -7,12 +7,18 @@ using RoxyBuildTool.Model;
 namespace RoxyBuildTool.Generators.CompilationDatabase;
 
 /// <summary>Generates a deterministic Clang-compatible compilation database from compile actions.</summary>
-public sealed class CompilationDatabaseGenerator : IWorkspaceGenerator
+public sealed class CompilationDatabaseGenerator : IWorkspaceGenerator, IWorkspaceGeneratorFingerprintProvider
 {
     private static readonly JsonWriterOptions WriterOptions = new() { Indented = true, NewLine = "\n" };
 
     public WorkspaceGeneratorId Id { get; } = new("CompileDb");
     public CapabilitySet Capabilities { get; } = new(["CompileCommands", "ArgumentsArray"]);
+
+    /// <inheritdoc />
+    public string GetAdditionalFingerprint(WorkspaceModel workspace, GenerationContext context)
+    {
+        return string.Empty;
+    }
 
     /// <inheritdoc />
     public GenerationResult Generate(WorkspaceModel workspace, GenerationContext context)

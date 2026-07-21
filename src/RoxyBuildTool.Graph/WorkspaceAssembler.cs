@@ -7,7 +7,7 @@ namespace RoxyBuildTool.Graph;
 /// <summary>Groups configured module variants into a generator-neutral workspace model.</summary>
 public static class WorkspaceAssembler
 {
-    /// <summary>Assembles projects and optionally imports the project-local build host.</summary>
+    /// <summary>Assembles native C++ projects for a workspace.</summary>
     public static WorkspaceModel Assemble(
         WorkspaceDefinition definition,
         IEnumerable<ConfiguredGraph> configuredGraphs,
@@ -33,7 +33,6 @@ public static class WorkspaceAssembler
                 return new WorkspaceProject(
                     group.Key,
                     presentationName,
-                    first.Language,
                     [
                         ..group.Select(pair => new WorkspaceProjectVariant(
                                 pair.graph.Target.Id,
@@ -76,18 +75,6 @@ public static class WorkspaceAssembler
                     : [..project.DependencyVariants.Where(dependency => projectIds.Contains(dependency.ProjectId))]
             })
         ];
-
-        if (definition.IncludeBuildHost && definition.BuildHostProject is not null)
-        {
-            projects = projects.Add(new WorkspaceProject(
-                "BuildRules",
-                "Build Rules",
-                ModuleLanguage.CSharp,
-                [],
-                [],
-                true,
-                definition.BuildHostProject));
-        }
 
         return new WorkspaceModel(definition.DisplayName, definition.StartupTarget, projects, graphs, actions);
     }

@@ -10,7 +10,7 @@ namespace RoxyBuildTool.Graph.Tests;
 public sealed class WorkspaceAndPlatformTests
 {
     [Fact]
-    public void WorkspaceAssemblyGroupsVariantsNamesProjectsAndAddsBuildHost()
+    public void WorkspaceAssemblyGroupsVariantsAndNamesProjects()
     {
         var debug = DependencyResolverBoundaryTests.Configuration("debug");
         var development = DependencyResolverBoundaryTests.Configuration();
@@ -31,14 +31,13 @@ public sealed class WorkspaceAndPlatformTests
             new ActionGraph(development, "game", [], []),
             new ActionGraph(debug, "game", [], []),
         };
-        var definition =
-            new WorkspaceDefinition("workspace", "Workspace", ["game"], "game", true, new("Build/Rules.csproj"));
+        var definition = new WorkspaceDefinition("workspace", "Workspace", ["game"], "game");
 
         var workspace = WorkspaceAssembler.Assemble(definition, configuredGraphs, actionGraphs);
 
         Assert.Equal("Workspace", workspace.Name);
         Assert.Equal("game", workspace.StartupTarget);
-        Assert.Equal(["Game.Core", "Game.Game", "BuildRules"], workspace.Projects.Select(project => project.Id));
+        Assert.Equal(["Game.Core", "Game.Game"], workspace.Projects.Select(project => project.Id));
         var game = workspace.Projects.Single(project => project.Id == "Game.Game");
         Assert.Equal("Game", game.Name);
         Assert.Equal(2, game.Variants.Length);
@@ -48,25 +47,22 @@ public sealed class WorkspaceAndPlatformTests
         Assert.Equal("Game.Core", dependencyVariant.ProjectId);
         var core = workspace.Projects.Single(project => project.Id == "Game.Core");
         Assert.Equal("Core.Game", core.Name);
-        var host = workspace.Projects.Single(project => project.IsBuildHost);
-        Assert.Equal(new LogicalPath("Build/Rules.csproj"), host.ImportedProject);
         Assert.Equal(["Debug", "Development"],
             workspace.ConfiguredGraphs.Select(graph => Profile(graph.Configuration)));
         Assert.Equal(["Debug", "Development"], workspace.ActionGraphs.Select(graph => Profile(graph.Configuration)));
     }
 
     [Fact]
-    public void WorkspaceAssemblyHandlesEqualPlainNamesAndOptionalBuildHost()
+    public void WorkspaceAssemblyHandlesEqualPlainNames()
     {
         var configuration = DependencyResolverBoundaryTests.Configuration();
         var module = Configured("plain", "Plain", ModuleKind.HeaderOnly);
         var graph = new ConfiguredGraph(configuration, new("plain", "Plain", ["plain"]), [module], []);
-        var definition = new WorkspaceDefinition("plain", "Plain", ["plain"], "plain", false, new("ignored.csproj"));
+        var definition = new WorkspaceDefinition("plain", "Plain", ["plain"], "plain");
 
         var workspace = WorkspaceAssembler.Assemble(definition, [graph], []);
 
         Assert.Equal("Plain", Assert.Single(workspace.Projects).Name);
-        Assert.DoesNotContain(workspace.Projects, project => project.IsBuildHost);
     }
 
     [Fact]
@@ -116,9 +112,9 @@ public sealed class WorkspaceAndPlatformTests
         string displayName,
         ModuleKind kind,
         ImmutableArray<DependencyEdge> dependencies = default) => new(
-        id, displayName, ModuleLanguage.Cxx, kind, [new($"{id}.cpp")],
+        id, displayName, kind, [new($"{id}.cpp")],
         UsageRequirements.Empty, UsageRequirements.Empty, UsageRequirements.Empty, UsageRequirements.Empty,
-        dependencies.IsDefault ? [] : dependencies, [], []);
+        dependencies.IsDefault ? [] : dependencies);
 
     private static string Profile(ConfigurationKey key) =>
         key.Values.Single(value => value.Fragment.Value == "Profile").Value;

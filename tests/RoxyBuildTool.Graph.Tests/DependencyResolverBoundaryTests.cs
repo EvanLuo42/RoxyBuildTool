@@ -12,7 +12,7 @@ public sealed class DependencyResolverBoundaryTests
     {
         var module = Module("module");
         var target = Target("target", ["module"]);
-        var workspace = new WorkspaceDefinition("workspace", "Workspace", ["target"], "target", false, null);
+        var workspace = new WorkspaceDefinition("workspace", "Workspace", ["target"], "target");
         var definitions = new DefinitionGraph([module], [target], [workspace]);
 
         Assert.Same(module, definitions.GetModule("module"));
@@ -175,33 +175,49 @@ public sealed class DependencyResolverBoundaryTests
     }
 
     [Fact]
-    public void CrossLanguageCompileUsageIsRejectedWhileRuntimeAndBuildOrderEdgesRemainValid()
+    public void PrivateStaticDependenciesCarryTheirLinkClosureWithoutLeakingCompileInterface()
     {
-        var nativeUsage = new UsageRequirements(
-            [new UsageValue("native/include", "native")], [], [new UsageValue("native.lib", "native")],
-            [new UsageValue("native.dll", "native")]);
         var definitions = new DefinitionGraph([
-            Module("native", ModuleKind.SharedLibrary, publicUsage: nativeUsage),
-            Module("managed", ModuleKind.CSharpConsoleApplication, ModuleLanguage.CSharp,
-                dependencies:
-                [
-                    new DependencyEdge("native", DependencyVisibility.Public),
-                    new DependencyEdge("runtime", DependencyVisibility.Runtime),
-                    new DependencyEdge("ordered", DependencyVisibility.BuildOrderOnly)
-                ]),
-            Module("runtime", ModuleKind.SharedLibrary, publicUsage: nativeUsage),
-            Module("ordered", ModuleKind.StaticLibrary)
-        ], [Target("target", ["managed"])], []);
+            Module("leaf", ModuleKind.StaticLibrary, publicUsage: Usage(include: "leaf/include")),
+            Module("middle", ModuleKind.StaticLibrary,
+                dependencies: [new("leaf", DependencyVisibility.Private)]),
+            Module("app", ModuleKind.Executable,
+                dependencies: [new("middle", DependencyVisibility.Private)]),
+        ], [Target("app", ["app"])], []);
 
         var graph = DependencyResolver.Resolve(definitions, definitions.Targets[0], Configuration());
-        var managed = graph.GetModule("managed");
+        var app = graph.GetModule("app");
+        var outputRoot = BuildPathLayout.OutputRoot(graph.Configuration, graph.Target.Id);
 
-        Assert.Single(graph.Diagnostics, diagnostic => diagnostic.Code == "RBT2004");
-        Assert.Empty(managed.CompileUsage.IncludeDirectories);
-        Assert.Empty(managed.CompileUsage.LinkInputs);
-        Assert.Contains(managed.CompileUsage.RuntimeFiles, item => item.Value == "native.dll");
-        Assert.Contains(managed.Dependencies, edge =>
-            edge.Module == "ordered" && edge.Visibility == DependencyVisibility.BuildOrderOnly);
+        Assert.Equal(
+            [$"{outputRoot}/leaf.lib", $"{outputRoot}/middle.lib"],
+            app.CompileUsage.LinkInputs.Select(value => value.Value));
+        Assert.DoesNotContain(app.CompileUsage.IncludeDirectories, value => value.Value == "leaf/include");
+    }
+
+    [Fact]
+    public void PrivateAndRuntimeEdgesCarryTheCompleteRuntimeClosureToExecutables()
+    {
+        var definitions = new DefinitionGraph([
+            Module("runtime", ModuleKind.SharedLibrary),
+            Module("shared", ModuleKind.SharedLibrary,
+                dependencies: [new("runtime", DependencyVisibility.Private)]),
+            Module("bridge", ModuleKind.StaticLibrary,
+                dependencies: [new("shared", DependencyVisibility.Runtime)]),
+            Module("app", ModuleKind.Executable,
+                dependencies:
+                [
+                    new("shared", DependencyVisibility.Private),
+                    new("bridge", DependencyVisibility.Private),
+                ]),
+        ], [Target("app", ["app"])], []);
+
+        var graph = DependencyResolver.Resolve(definitions, definitions.Targets[0], Configuration());
+        var outputRoot = BuildPathLayout.OutputRoot(graph.Configuration, graph.Target.Id);
+
+        Assert.Equal(
+            [$"{outputRoot}/runtime.dll", $"{outputRoot}/shared.dll"],
+            graph.GetModule("app").CompileUsage.RuntimeFiles.Select(value => value.Value));
     }
 
     [Fact]
@@ -258,21 +274,17 @@ public sealed class DependencyResolverBoundaryTests
     internal static ModuleDefinition Module(
         string id,
         ModuleKind kind = ModuleKind.HeaderOnly,
-        ModuleLanguage language = ModuleLanguage.Cxx,
         string[]? sources = null,
         UsageRequirements? publicUsage = null,
         UsageRequirements? privateUsage = null,
         DependencyEdge[]? dependencies = null) => new(
         id,
         id,
-        language,
         kind,
         (sources ?? []).Select(path => new LogicalPath(path)).ToImmutableArray(),
         publicUsage ?? UsageRequirements.Empty,
         privateUsage ?? UsageRequirements.Empty,
         (dependencies ?? []).ToImmutableArray(),
-        language == ModuleLanguage.CSharp ? ["net10.0"] : [],
-        [],
         []);
 
     internal static TargetDefinition Target(string id, string[] roots) => new(

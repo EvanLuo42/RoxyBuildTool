@@ -23,14 +23,7 @@ public static class ActionGraphLowerer
 
         foreach (var module in TopologicalOrder(graph.Modules))
         {
-            if (module.Language == ModuleLanguage.CSharp)
-            {
-                LowerCSharp(module);
-            }
-            else
-            {
-                LowerCxx(module);
-            }
+            LowerCxx(module);
         }
 
         return new ActionGraph(
@@ -55,11 +48,15 @@ public static class ActionGraphLowerer
                 return;
             }
 
-            var pchSource = settings.PrecompiledSource;
+            var declaredPchSource = settings.PrecompiledSource;
+            var pchSource = declaredPchSource is null
+                ? null
+                : module.Sources.Select(source => (LogicalPath?)source).FirstOrDefault(source =>
+                    LogicalPath.FileSystemComparer.Equals(source!.Value.Value, declaredPchSource.Value.Value));
             var pchHeader = settings.PrecompiledHeader;
-            if (pchSource is not null && !module.Sources.Contains(pchSource.Value))
+            if (declaredPchSource is not null && pchSource is null)
                 throw new InvalidOperationException(
-                    $"Module '{module.Id}' precompiled source '{pchSource}' is not part of its source set.");
+                    $"Module '{module.Id}' precompiled source '{declaredPchSource}' is not part of its source set.");
 
             var pchPath = pchSource is null
                 ? null
@@ -107,7 +104,8 @@ public static class ActionGraphLowerer
                 var objectPath = BuildPathLayout.ObjectFile(
                     graph.Configuration, graph.Target.Id, module.Id, source, sourceToken);
                 var actionId = ActionId(module.Id, $"compile-{sourceToken}");
-                var createsPch = pchSource is not null && source == pchSource.Value;
+                var createsPch = pchSource is not null &&
+                                 LogicalPath.FileSystemComparer.Equals(source.Value, pchSource.Value.Value);
                 var sharedArguments = pchPath is null || pchHeader is null
                     ? commonArguments
                     : createsPch
@@ -128,7 +126,7 @@ public static class ActionGraphLowerer
                     toolchain.Compiler,
                     new ActionArgumentSequence(sharedArguments, actionArguments),
                     WorkingDirectory,
-                    [.. inputs.Distinct(StringComparer.Ordinal)],
+                    [.. inputs.Distinct(LogicalPath.FileSystemComparer)],
                     [.. compileOutputs],
                     createsPch || pchActionId is null ? [] : [pchActionId],
                     CompileEnvironment,
@@ -186,7 +184,14 @@ public static class ActionGraphLowerer
             {
                 var outputName = settings.OutputName ?? module.Id;
                 var libraryOutput = $"{outputRoot}/{outputName}.lib";
-                var objectInputs = objectPaths.ToImmutableArray();
+                var objectInputs = objectPaths
+                    .Concat(module.CompileUsage.LinkInputs
+                        .Select(input => input.Value)
+                        .Where(input => input.EndsWith(".obj", StringComparison.OrdinalIgnoreCase) ||
+                                        input.EndsWith(".res", StringComparison.OrdinalIgnoreCase)))
+                    .Distinct(LogicalPath.FileSystemComparer)
+                    .Order(StringComparer.Ordinal)
+                    .ToImmutableArray();
                 actions.Add(new BuildAction(finalActionId, BuildActionKind.Archive, toolchain.Librarian,
                     new ActionArgumentSequence(
                         ["/nologo", .. settings.LibrarianArguments, $"/OUT:{libraryOutput}"], objectInputs),
@@ -234,7 +239,7 @@ public static class ActionGraphLowerer
                              StringComparer.Ordinal))
                 {
                     var destination = $"{outputRoot}/{Path.GetFileName(runtime.Value)}";
-                    if (string.Equals(runtime.Value, destination, StringComparison.Ordinal)) continue;
+                    if (LogicalPath.FileSystemComparer.Equals(runtime.Value, destination)) continue;
 
                     var copyId = CopyActionId(module.Id, runtime.Value);
                     actions.Add(new BuildAction(copyId, BuildActionKind.Copy, "copy",
@@ -264,13 +269,6 @@ public static class ActionGraphLowerer
             return module.CompileUsage.SystemIncludeDirectories.IsDefault
                 ? []
                 : module.CompileUsage.SystemIncludeDirectories;
-        }
-
-        void LowerCSharp(ConfiguredModule module)
-        {
-            // Managed projects are lowered by their selected project-system backend. Keeping generated
-            // project paths out of the core action graph prevents the graph from depending on Vs2022.
-            finalActions[module.Id] = [];
         }
 
         ImmutableArray<string> DependencyActions(ConfiguredModule module)

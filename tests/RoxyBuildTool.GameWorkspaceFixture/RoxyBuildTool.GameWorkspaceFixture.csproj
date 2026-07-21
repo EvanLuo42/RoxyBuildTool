@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+    <PropertyGroup>
+        <IsPackable>false</IsPackable>
+    </PropertyGroup>
+    <ItemGroup>
+        <ProjectReference Include="../../src/RoxyBuildTool/RoxyBuildTool.csproj"/>
+    </ItemGroup>
+    <ItemGroup>
+        <!-- Build the real-world game rules as an isolated downstream rules assembly. -->
+        <Compile Include="../../samples/WindowsMvp/Build/Rules.cs" Link="Rules.cs"/>
+        <Compile Include="../../samples/WindowsMvp/**/*.Module.cs" Link="Modules/%(RecursiveDir)%(Filename)%(Extension)"/>
+    </ItemGroup>
+</Project>

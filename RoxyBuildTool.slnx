@@ -17,6 +17,7 @@
     <Project Path="tests/RoxyBuildTool.BackendGoldenTests/RoxyBuildTool.BackendGoldenTests.csproj" />
     <Project Path="tests/RoxyBuildTool.IntegrationTests/RoxyBuildTool.IntegrationTests.csproj" />
     <Project Path="tests/RoxyBuildTool.FakeMsBuild/RoxyBuildTool.FakeMsBuild.csproj" />
+      <Project Path="tests/RoxyBuildTool.GameWorkspaceFixture/RoxyBuildTool.GameWorkspaceFixture.csproj"/>
   </Folder>
   <Folder Name="/benchmarks/">
     <Project Path="benchmarks/RoxyBuildTool.Benchmarks/RoxyBuildTool.Benchmarks.csproj"/>

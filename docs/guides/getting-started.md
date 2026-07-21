@@ -5,7 +5,7 @@ description: Build RoxyBuildTool and generate the included Windows workspace.
 
 # Getting started
 
-The repository contains a complete mixed C++/.NET example in `samples/WindowsMvp`. The example consumes locally packed RoxyBuildTool packages, matching how a downstream repository uses the tool.
+The repository contains a complete C++ example in `samples/WindowsMvp`. The example consumes locally packed RoxyBuildTool packages, matching how a downstream repository uses the tool.
 
 ## Prerequisites
 

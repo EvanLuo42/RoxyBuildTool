@@ -11,20 +11,16 @@ public sealed record ConditionalModuleRule(
     ImmutableArray<string> AddDefines,
     ImmutableArray<string> RemoveDependencies);
 
-/// <summary>Contains unresolved authoring data for one native or managed module.</summary>
+/// <summary>Contains unresolved authoring data for one native C++ module.</summary>
 public sealed record ModuleDefinition(
     string Id,
     string DisplayName,
-    ModuleLanguage Language,
     ModuleKind Kind,
     ImmutableArray<LogicalPath> Sources,
     UsageRequirements PublicUsage,
     UsageRequirements PrivateUsage,
     ImmutableArray<DependencyEdge> Dependencies,
-    ImmutableArray<string> TargetFrameworks,
-    ImmutableArray<PackageReferenceModel> Packages,
     ImmutableArray<ConditionalModuleRule> ConditionalRules,
-    string? RootNamespace = null,
     Func<ConfigurationKey, ModuleDefinition>? ConfigureForConfiguration = null,
     CxxModuleSettings? CxxSettings = null);
 
@@ -40,9 +36,7 @@ public sealed record WorkspaceDefinition(
     string Id,
     string DisplayName,
     ImmutableArray<string> Targets,
-    string StartupTarget,
-    bool IncludeBuildHost,
-    LogicalPath? BuildHostProject);
+    string StartupTarget);
 
 /// <summary>Contains all module, target, and workspace definitions discovered from the rules assemblies.</summary>
 public sealed record DefinitionGraph(
