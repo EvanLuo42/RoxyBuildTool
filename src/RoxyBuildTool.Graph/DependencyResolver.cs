@@ -8,7 +8,8 @@ namespace RoxyBuildTool.Graph;
 public static class DependencyResolver
 {
     /// <summary>Creates a configured graph and reports missing, disabled, or cyclic dependencies.</summary>
-    public static ConfiguredGraph Resolve(DefinitionGraph definitions, TargetDefinition target, ConfigurationKey configuration)
+    public static ConfiguredGraph Resolve(DefinitionGraph definitions, TargetDefinition target,
+        ConfigurationKey configuration)
     {
         var states = new Dictionary<string, VisitState>(StringComparer.Ordinal);
         var configured = new Dictionary<string, ConfiguredModule>(StringComparer.Ordinal);
@@ -22,15 +23,15 @@ public static class DependencyResolver
 
         if (diagnostics.Any(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error))
         {
-            return new(configuration,
-                new(target.Id, target.DisplayName, target.RootModules),
-                configured.Values.OrderBy(module => module.Id, StringComparer.Ordinal).ToImmutableArray(),
+            return new ConfiguredGraph(configuration,
+                new ConfiguredTarget(target.Id, target.DisplayName, target.RootModules),
+                [..configured.Values.OrderBy(module => module.Id, StringComparer.Ordinal)],
                 diagnostics.ToImmutable());
         }
 
-        return new(configuration,
-            new(target.Id, target.DisplayName, target.RootModules),
-            configured.Values.OrderBy(module => module.Id, StringComparer.Ordinal).ToImmutableArray(),
+        return new ConfiguredGraph(configuration,
+            new ConfiguredTarget(target.Id, target.DisplayName, target.RootModules),
+            [..configured.Values.OrderBy(module => module.Id, StringComparer.Ordinal)],
             diagnostics.ToImmutable());
 
         ConfiguredModule? Visit(string moduleId)
@@ -44,7 +45,7 @@ public static class DependencyResolver
 
                 var cycleStart = stack.IndexOf(moduleId);
                 var cycle = stack.Skip(cycleStart).Append(moduleId);
-                diagnostics.Add(new("RBT2001", DiagnosticSeverity.Error,
+                diagnostics.Add(new Diagnostic("RBT2001", DiagnosticSeverity.Error,
                     $"Dependency cycle detected: {string.Join(" -> ", cycle)}.", moduleId, configuration.Canonical));
                 return null;
             }
@@ -57,7 +58,7 @@ public static class DependencyResolver
             }
             catch (InvalidOperationException)
             {
-                diagnostics.Add(new("RBT2002", DiagnosticSeverity.Error,
+                diagnostics.Add(new Diagnostic("RBT2002", DiagnosticSeverity.Error,
                     $"Module '{moduleId}' is not registered.", moduleId, configuration.Canonical));
                 return null;
             }
@@ -95,7 +96,7 @@ public static class DependencyResolver
                 {
                     if (dependency.Visibility is not DependencyVisibility.BuildOrderOnly)
                     {
-                        diagnostics.Add(new("RBT2003", DiagnosticSeverity.Error,
+                        diagnostics.Add(new Diagnostic("RBT2003", DiagnosticSeverity.Error,
                             $"Module '{moduleId}' requires disabled or invalid module '{dependency.Module}'.",
                             moduleId, configuration.Canonical));
                     }
@@ -108,15 +109,15 @@ public static class DependencyResolver
                     compileUsage = compileUsage.Union(resolvedDependency.ConsumerUsage);
                 }
 
-                if (dependency.Visibility is DependencyVisibility.Public or DependencyVisibility.Interface)
+                switch (dependency.Visibility)
                 {
-                    consumerUsage = consumerUsage.Union(resolvedDependency.ConsumerUsage);
-                }
-
-                if (dependency.Visibility == DependencyVisibility.Runtime)
-                {
-                    compileUsage = compileUsage.Union(new UsageRequirements([], [], [],
-                        resolvedDependency.ConsumerUsage.RuntimeFiles));
+                    case DependencyVisibility.Public or DependencyVisibility.Interface:
+                        consumerUsage = consumerUsage.Union(resolvedDependency.ConsumerUsage);
+                        break;
+                    case DependencyVisibility.Runtime:
+                        compileUsage = compileUsage.Union(new UsageRequirements([], [], [],
+                            resolvedDependency.ConsumerUsage.RuntimeFiles));
+                        break;
                 }
             }
 
@@ -149,13 +150,16 @@ public static class DependencyResolver
         var platform = GetValue(configuration, "Platform");
         var architecture = GetValue(configuration, "Architecture");
         var profile = GetValue(configuration, "Profile");
-        var outputRoot = $"out/{platform.ToLowerInvariant()}/{architecture.ToLowerInvariant()}/{profile.ToLowerInvariant()}/{target.Id}";
+        var outputRoot =
+            $"out/{platform.ToLowerInvariant()}/{architecture.ToLowerInvariant()}/{profile.ToLowerInvariant()}/{target.Id}";
         return module.Kind switch
         {
-            ModuleKind.StaticLibrary => new([], [], [new($"{outputRoot}/{module.Id}.lib", $"{module.Id}:artifact")],
+            ModuleKind.StaticLibrary => new UsageRequirements([], [],
+                [new UsageValue($"{outputRoot}/{module.Id}.lib", $"{module.Id}:artifact")],
                 []),
-            ModuleKind.SharedLibrary => new([], [], [new($"{outputRoot}/{module.Id}.lib", $"{module.Id}:artifact")],
-                [new($"{outputRoot}/{module.Id}.dll", $"{module.Id}:runtime")]),
+            ModuleKind.SharedLibrary => new UsageRequirements([], [],
+                [new UsageValue($"{outputRoot}/{module.Id}.lib", $"{module.Id}:artifact")],
+                [new UsageValue($"{outputRoot}/{module.Id}.dll", $"{module.Id}:runtime")]),
             _ => UsageRequirements.Empty,
         };
     }

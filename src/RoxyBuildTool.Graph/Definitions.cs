@@ -51,8 +51,10 @@ public sealed record DefinitionGraph(
 {
     /// <summary>Gets a module by stable ID.</summary>
     public ModuleDefinition GetModule(string id) => Modules.Single(module => module.Id == id);
+
     /// <summary>Gets a target by stable ID.</summary>
     public TargetDefinition GetTarget(string id) => Targets.Single(target => target.Id == id);
+
     /// <summary>Gets a workspace by stable ID.</summary>
     public WorkspaceDefinition GetWorkspace(string id) => Workspaces.Single(workspace => workspace.Id == id);
 }

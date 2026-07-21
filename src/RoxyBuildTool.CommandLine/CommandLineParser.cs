@@ -75,16 +75,16 @@ public static class CommandLineParser
 
                     break;
                 case "--platform":
-                    selectors[new("Platform")] = ToPascalCase(NextValue(option));
+                    selectors[new FragmentId("Platform")] = ToPascalCase(NextValue(option));
                     break;
                 case "--arch":
-                    selectors[new("Architecture")] = ToPascalCase(NextValue(option));
+                    selectors[new FragmentId("Architecture")] = ToPascalCase(NextValue(option));
                     break;
                 case "--profile":
-                    selectors[new("Profile")] = ToPascalCase(NextValue(option));
+                    selectors[new FragmentId("Profile")] = ToPascalCase(NextValue(option));
                     break;
                 case "--toolchain":
-                    selectors[new("Toolchain")] = ToPascalCase(NextValue(option));
+                    selectors[new FragmentId("Toolchain")] = ToPascalCase(NextValue(option));
                     break;
                 case "--fragment":
                     var assignment = NextValue(option).Split('=', 2);
@@ -93,7 +93,7 @@ public static class CommandLineParser
                         throw new CommandLineException("--fragment expects <id>=<value>.");
                     }
 
-                    selectors[new(ToPascalCase(assignment[0]))] = ToPascalCase(assignment[1]);
+                    selectors[new FragmentId(ToPascalCase(assignment[0]))] = ToPascalCase(assignment[1]);
                     break;
                 case "--setting":
                     setting = ToPascalCase(NextValue(option));
@@ -112,18 +112,13 @@ public static class CommandLineParser
             }
         }
 
-        return new(kind, subject,
+        return new CommandRequest(kind, subject,
             generators.Count == 0 ? defaultRequest.WorkspaceGenerators : generators.ToImmutable(),
             selectors.ToImmutable(), setting, whyExcluded, format);
 
         string NextValue(string option)
         {
-            if (index >= args.Length)
-            {
-                throw new CommandLineException($"{option} expects a value.");
-            }
-
-            return args[index++];
+            return index >= args.Length ? throw new CommandLineException($"{option} expects a value.") : args[index++];
         }
     }
 

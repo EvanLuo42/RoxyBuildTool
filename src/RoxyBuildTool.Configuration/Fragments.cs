@@ -85,8 +85,8 @@ public sealed class FragmentRegistry
         }
 
         var attribute = type.GetCustomAttribute<BuildFragmentAttribute>()
-            ?? throw new FragmentException(new("RBT1001", DiagnosticSeverity.Error,
-                $"Enum '{type.FullName}' must have [BuildFragment]."));
+                        ?? throw new FragmentException(new Diagnostic("RBT1001", DiagnosticSeverity.Error,
+                            $"Enum '{type.FullName}' must have [BuildFragment]."));
         var id = new FragmentId(attribute.Id);
         var values = Enum.GetNames(type)
             .Select(name => new FragmentValue(id, GetValueId(type.GetField(name)!)))
@@ -101,7 +101,7 @@ public sealed class FragmentRegistry
                 return existing;
             }
 
-            throw new FragmentException(new("RBT1002", DiagnosticSeverity.Error,
+            throw new FragmentException(new Diagnostic("RBT1002", DiagnosticSeverity.Error,
                 $"Fragment ID '{id}' is already registered by '{existing.ClrType?.FullName ?? "a built-in fragment"}'."));
         }
 
@@ -114,13 +114,13 @@ public sealed class FragmentRegistry
     {
         var metadata = RegisterEnum<T>();
         var name = Enum.GetName(value)
-            ?? throw new FragmentException(new("RBT1003", DiagnosticSeverity.Error,
-                $"'{value}' is not a named value of '{typeof(T).FullName}'."));
-        return new(metadata.Id, GetValueId(typeof(T).GetField(name)!));
+                   ?? throw new FragmentException(new Diagnostic("RBT1003", DiagnosticSeverity.Error,
+                       $"'{value}' is not a named value of '{typeof(T).FullName}'."));
+        return new FragmentValue(metadata.Id, GetValueId(typeof(T).GetField(name)!));
     }
 
     private void RegisterBuiltIn(FragmentId id, ImmutableArray<FragmentValue> values) =>
-        _metadata.Add(id, new(id, null, values));
+        _metadata.Add(id, new FragmentMetadata(id, null, values));
 
     private static string GetValueId(FieldInfo field) =>
         field.GetCustomAttribute<FragmentValueAttribute>()?.Id ?? field.Name;
@@ -132,19 +132,19 @@ public sealed class FragmentRegistry
         var capitalizeNext = true;
         foreach (var character in value)
         {
-            if (character == '.')
+            switch (character)
             {
-                result.Append(character);
-                capitalizeNext = true;
-            }
-            else if (character is '-' or '_')
-            {
-                capitalizeNext = true;
-            }
-            else
-            {
-                result.Append(capitalizeNext ? char.ToUpperInvariant(character) : character);
-                capitalizeNext = false;
+                case '.':
+                    result.Append(character);
+                    capitalizeNext = true;
+                    break;
+                case '-' or '_':
+                    capitalizeNext = true;
+                    break;
+                default:
+                    result.Append(capitalizeNext ? char.ToUpperInvariant(character) : character);
+                    capitalizeNext = false;
+                    break;
             }
         }
 

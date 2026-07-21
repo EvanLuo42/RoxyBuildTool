@@ -32,7 +32,7 @@ public sealed class CompilationDatabaseGenerator : IWorkspaceGenerator
             .ToImmutableArray();
         var content = JsonSerializer.Serialize(entries, SerializerOptions)
             .Replace("\r\n", "\n", StringComparison.Ordinal) + "\n";
-        return new(Id, [new(new("compile_commands.json"), content)], []);
+        return new GenerationResult(Id, [new GeneratedFile(new LogicalPath("compile_commands.json"), content)], []);
     }
 
     private sealed record CompileCommand(
@@ -48,7 +48,11 @@ public sealed class CompilationDatabasePlugin : IPlugin
     public PluginId Id { get; } = new("Roxy.Generator.CompileDb");
     public Version Version { get; } = new(0, 1, 0);
     public CapabilitySet Capabilities { get; } = new(["Workspace.CompileDb"]);
-    public void Register(IPluginRegistry registry) => registry.AddService<IWorkspaceGenerator>(new CompilationDatabaseGenerator());
+
+    public void Register(IPluginRegistry registry)
+    {
+        registry.AddService<IWorkspaceGenerator>(new CompilationDatabaseGenerator());
+    }
 }
 
 /// <summary>Provides compilation database composition extensions.</summary>

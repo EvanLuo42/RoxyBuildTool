@@ -17,7 +17,8 @@ public static class ActionGraphLowerer
         var platform = Value(graph.Configuration, "Platform");
         var architecture = Value(graph.Configuration, "Architecture");
         var profile = Value(graph.Configuration, "Profile");
-        var outputRoot = $"out/{platform.ToLowerInvariant()}/{architecture.ToLowerInvariant()}/{profile.ToLowerInvariant()}/{graph.Target.Id}";
+        var outputRoot =
+            $"out/{platform.ToLowerInvariant()}/{architecture.ToLowerInvariant()}/{profile.ToLowerInvariant()}/{graph.Target.Id}";
         var intermediateRoot = $"intermediate/{graph.Configuration.ShortHash}/{graph.Target.Id}";
         var policy = toolchain.GetPolicy(graph.Configuration);
 
@@ -47,7 +48,8 @@ public static class ActionGraphLowerer
             for (var index = 0; index < module.Sources.Length; index++)
             {
                 var source = module.Sources[index];
-                var objectPath = $"{intermediateRoot}/{module.Id}/{index:D4}-{Path.GetFileNameWithoutExtension(source.Value)}.obj";
+                var objectPath =
+                    $"{intermediateRoot}/{module.Id}/{index:D4}-{Path.GetFileNameWithoutExtension(source.Value)}.obj";
                 var actionId = ActionId(module.Id, $"compile-{index:D4}");
                 var arguments = new List<string> { "/nologo", "/c", "/EHsc", "/std:c++latest" };
                 arguments.AddRange(policy.CompileArguments);
@@ -55,12 +57,12 @@ public static class ActionGraphLowerer
                 arguments.AddRange(module.CompileUsage.Defines.Select(define => $"/D{define.Value}"));
                 arguments.Add(source.Value);
                 arguments.Add($"/Fo{objectPath}");
-                actions.Add(new(
+                actions.Add(new BuildAction(
                     actionId,
                     BuildActionKind.Compile,
                     toolchain.Compiler,
-                    arguments.ToImmutableArray(),
-                    new("."),
+                    [..arguments],
+                    new LogicalPath("."),
                     [source.Value],
                     [objectPath],
                     DependencyActions(module),
@@ -68,7 +70,9 @@ public static class ActionGraphLowerer
                     true,
                     true,
                     []));
-                artifacts.Add(new($"{module.Id}:object:{index:D4}", ArtifactKind.ObjectFile, new(objectPath), actionId));
+                artifacts.Add(new BuildArtifact($"{module.Id}:object:{index:D4}", ArtifactKind.ObjectFile,
+                    new LogicalPath(objectPath),
+                    actionId));
                 objectActions.Add(actionId);
                 objectPaths.Add(objectPath);
             }
@@ -85,10 +89,13 @@ public static class ActionGraphLowerer
             if (module.Kind == ModuleKind.StaticLibrary)
             {
                 var output = $"{outputRoot}/{module.Id}.lib";
-                actions.Add(new(finalActionId, BuildActionKind.Archive, toolchain.Librarian,
-                    ["/nologo", $"/OUT:{output}", .. objectPaths], new("."), [.. objectPaths], [output], dependencies,
+                actions.Add(new BuildAction(finalActionId, BuildActionKind.Archive, toolchain.Librarian,
+                    ["/nologo", $"/OUT:{output}", .. objectPaths], new LogicalPath("."), [.. objectPaths], [output],
+                    dependencies,
                     ["LIB", "TMP", "TEMP"], true, false, []));
-                artifacts.Add(new($"{module.Id}:StaticLibrary", ArtifactKind.StaticLibrary, new(output), finalActionId));
+                artifacts.Add(new BuildArtifact($"{module.Id}:StaticLibrary", ArtifactKind.StaticLibrary,
+                    new LogicalPath(output),
+                    finalActionId));
             }
             else
             {
@@ -100,20 +107,22 @@ public static class ActionGraphLowerer
                     arguments.Add("/DLL");
                     arguments.Add($"/IMPLIB:{outputRoot}/{module.Id}.lib");
                 }
+
                 arguments.AddRange(policy.LinkArguments);
                 arguments.AddRange(objectPaths);
                 arguments.AddRange(module.CompileUsage.LinkInputs.Select(input => input.Value));
-                actions.Add(new(finalActionId, BuildActionKind.Link, toolchain.Linker,
-                    arguments.ToImmutableArray(), new("."),
+                actions.Add(new BuildAction(finalActionId, BuildActionKind.Link, toolchain.Linker,
+                    [..arguments], new LogicalPath("."),
                     [.. objectPaths, .. module.CompileUsage.LinkInputs.Select(input => input.Value)],
                     [output], dependencies, ["LIB", "TMP", "TEMP"], true, false, []));
-                artifacts.Add(new($"{module.Id}:{extension}",
+                artifacts.Add(new BuildArtifact($"{module.Id}:{extension}",
                     module.Kind == ModuleKind.SharedLibrary ? ArtifactKind.SharedLibrary : ArtifactKind.Executable,
-                    new(output), finalActionId));
+                    new LogicalPath(output), finalActionId));
 
                 if (module.Kind == ModuleKind.Executable)
                 {
-                    foreach (var runtime in module.CompileUsage.RuntimeFiles.OrderBy(value => value.Value, StringComparer.Ordinal))
+                    foreach (var runtime in module.CompileUsage.RuntimeFiles.OrderBy(value => value.Value,
+                                 StringComparer.Ordinal))
                     {
                         var copyId = ActionId(module.Id, $"copy-{Path.GetFileNameWithoutExtension(runtime.Value)}");
                         var destination = $"{outputRoot}/{Path.GetFileName(runtime.Value)}";
@@ -121,11 +130,12 @@ public static class ActionGraphLowerer
                         {
                             continue;
                         }
-                        actions.Add(new(copyId, BuildActionKind.Copy, "copy",
-                            ["/Y", runtime.Value, destination], new("."), [runtime.Value], [destination],
+
+                        actions.Add(new BuildAction(copyId, BuildActionKind.Copy, "copy",
+                            ["/Y", runtime.Value, destination], new LogicalPath("."), [runtime.Value], [destination],
                             [finalActionId, .. DependencyActions(module)], [], true, false, []));
-                        artifacts.Add(new($"{module.Id}:runtime:{Path.GetFileName(runtime.Value)}",
-                            ArtifactKind.RuntimeFile, new(destination), copyId));
+                        artifacts.Add(new BuildArtifact($"{module.Id}:runtime:{Path.GetFileName(runtime.Value)}",
+                            ArtifactKind.RuntimeFile, new LogicalPath(destination), copyId));
                     }
                 }
             }
@@ -149,37 +159,50 @@ public static class ActionGraphLowerer
             var restoreId = ActionId(module.Id, "DotnetRestore");
             var buildId = ActionId(module.Id, "DotnetBuild");
             var dependencies = DependencyActions(module);
-            actions.Add(new(restoreId, BuildActionKind.DotNetRestore, "dotnet",
-                ["restore", project, "--locked-mode"], new("."), [project], [$"{intermediateRoot}/{module.Id}/restore.stamp"],
+            actions.Add(new BuildAction(restoreId, BuildActionKind.DotNetRestore, "dotnet",
+                ["restore", project, "--locked-mode"], new LogicalPath("."), [project],
+                [$"{intermediateRoot}/{module.Id}/restore.stamp"],
                 dependencies, ["NUGET_PACKAGES", "NUGET_HTTP_CACHE_PATH", "TMP", "TEMP"], true, false, []));
             var assembly = $"{outputRoot}/{module.Id}/{module.Id}.dll";
-            actions.Add(new(buildId, BuildActionKind.DotNetBuild, "dotnet",
-                ["build", project, "--no-restore", "--configuration", profile, $"-p:RoxyConfigurationHash={graph.Configuration.ShortHash}"],
-                new("."), [project, .. module.Sources.Select(source => source.Value)], [assembly],
+            actions.Add(new BuildAction(buildId, BuildActionKind.DotNetBuild, "dotnet",
+                [
+                    "build", project, "--no-restore", "--configuration", profile,
+                    $"-p:RoxyConfigurationHash={graph.Configuration.ShortHash}"
+                ],
+                new LogicalPath("."), [project, .. module.Sources.Select(source => source.Value)], [assembly],
                 [restoreId, .. dependencies], ["DOTNET_ROOT", "NUGET_PACKAGES", "TMP", "TEMP"], true, false, []));
-            artifacts.Add(new($"{module.Id}:ManagedAssembly", ArtifactKind.ManagedAssembly, new(assembly), buildId));
+            artifacts.Add(new BuildArtifact($"{module.Id}:ManagedAssembly", ArtifactKind.ManagedAssembly,
+                new LogicalPath(assembly),
+                buildId));
             var finalAction = buildId;
-            foreach (var runtime in module.CompileUsage.RuntimeFiles.OrderBy(value => value.Value, StringComparer.Ordinal))
+            foreach (var runtime in module.CompileUsage.RuntimeFiles.OrderBy(value => value.Value,
+                         StringComparer.Ordinal))
             {
                 var copyId = ActionId(module.Id, $"copy-{Path.GetFileNameWithoutExtension(runtime.Value)}");
                 var destination = $"{outputRoot}/{module.Id}/{Path.GetFileName(runtime.Value)}";
-                actions.Add(new(copyId, BuildActionKind.Copy, "copy",
-                    ["/Y", runtime.Value, destination], new("."), [runtime.Value], [destination],
+                actions.Add(new BuildAction(copyId, BuildActionKind.Copy, "copy",
+                    ["/Y", runtime.Value, destination], new LogicalPath("."), [runtime.Value], [destination],
                     [buildId, .. dependencies], [], true, false, []));
-                artifacts.Add(new($"{module.Id}:runtime:{Path.GetFileName(runtime.Value)}",
-                    ArtifactKind.RuntimeFile, new(destination), copyId));
+                artifacts.Add(new BuildArtifact($"{module.Id}:runtime:{Path.GetFileName(runtime.Value)}",
+                    ArtifactKind.RuntimeFile, new LogicalPath(destination), copyId));
                 finalAction = copyId;
             }
+
             finalActions[module.Id] = finalAction;
         }
 
-        ImmutableArray<string> DependencyActions(ConfiguredModule module) => module.Dependencies
-            .Select(dependency => finalActions.GetValueOrDefault(dependency.Module))
-            .Where(action => !string.IsNullOrEmpty(action))
-            .Select(action => action!)
-            .Distinct(StringComparer.Ordinal)
-            .Order(StringComparer.Ordinal)
-            .ToImmutableArray();
+        ImmutableArray<string> DependencyActions(ConfiguredModule module)
+        {
+            return
+            [
+                ..module.Dependencies
+                    .Select(dependency => finalActions.GetValueOrDefault(dependency.Module))
+                    .Where(action => !string.IsNullOrEmpty(action))
+                    .Select(action => action!)
+                    .Distinct(StringComparer.Ordinal)
+                    .Order(StringComparer.Ordinal)
+            ];
+        }
 
         string ActionId(string module, string operation) =>
             $"{graph.Target.Id}:{graph.Configuration.ShortHash}:{module}:{FragmentRegistry.ToPascalCase(operation)}";
@@ -204,7 +227,8 @@ public static class ActionGraphLowerer
                 return;
             }
 
-            foreach (var dependency in module.Dependencies.OrderBy(dependency => dependency.Module, StringComparer.Ordinal))
+            foreach (var dependency in module.Dependencies.OrderBy(dependency => dependency.Module,
+                         StringComparer.Ordinal))
             {
                 if (byId.TryGetValue(dependency.Module, out var dependencyModule))
                 {

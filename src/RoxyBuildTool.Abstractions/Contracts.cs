@@ -34,19 +34,19 @@ internal static partial class StableIdSyntax
         var capitalizeNext = true;
         foreach (var character in value)
         {
-            if (character == '.')
+            switch (character)
             {
-                result.Append(character);
-                capitalizeNext = true;
-            }
-            else if (character is '-' or '_')
-            {
-                capitalizeNext = true;
-            }
-            else
-            {
-                result.Append(capitalizeNext ? char.ToUpperInvariant(character) : character);
-                capitalizeNext = false;
+                case '.':
+                    result.Append(character);
+                    capitalizeNext = true;
+                    break;
+                case '-' or '_':
+                    capitalizeNext = true;
+                    break;
+                default:
+                    result.Append(capitalizeNext ? char.ToUpperInvariant(character) : character);
+                    capitalizeNext = false;
+                    break;
             }
         }
 
@@ -59,6 +59,7 @@ public readonly record struct FragmentId : IComparable<FragmentId>
 {
     /// <summary>Creates a fragment ID after validating and normalizing <paramref name="value"/>.</summary>
     public FragmentId(string value) => Value = StableIdSyntax.Validate(value, nameof(value));
+
     public string Value { get; }
     public int CompareTo(FragmentId other) => StringComparer.Ordinal.Compare(Value, other.Value);
     public static bool operator <(FragmentId left, FragmentId right) => left.CompareTo(right) < 0;
@@ -73,6 +74,7 @@ public readonly record struct PluginId : IComparable<PluginId>
 {
     /// <summary>Creates a plugin ID after validating and normalizing <paramref name="value"/>.</summary>
     public PluginId(string value) => Value = StableIdSyntax.Validate(value, nameof(value));
+
     public string Value { get; }
     public int CompareTo(PluginId other) => StringComparer.Ordinal.Compare(Value, other.Value);
     public static bool operator <(PluginId left, PluginId right) => left.CompareTo(right) < 0;
@@ -87,6 +89,7 @@ public readonly record struct PlatformId : IComparable<PlatformId>
 {
     /// <summary>Creates a platform ID after validating and normalizing <paramref name="value"/>.</summary>
     public PlatformId(string value) => Value = StableIdSyntax.Validate(value, nameof(value));
+
     public string Value { get; }
     public int CompareTo(PlatformId other) => StringComparer.Ordinal.Compare(Value, other.Value);
     public static bool operator <(PlatformId left, PlatformId right) => left.CompareTo(right) < 0;
@@ -101,6 +104,7 @@ public readonly record struct ToolchainId : IComparable<ToolchainId>
 {
     /// <summary>Creates a toolchain ID after validating and normalizing <paramref name="value"/>.</summary>
     public ToolchainId(string value) => Value = StableIdSyntax.Validate(value, nameof(value));
+
     public string Value { get; }
     public int CompareTo(ToolchainId other) => StringComparer.Ordinal.Compare(Value, other.Value);
     public static bool operator <(ToolchainId left, ToolchainId right) => left.CompareTo(right) < 0;
@@ -115,6 +119,7 @@ public readonly record struct WorkspaceGeneratorId : IComparable<WorkspaceGenera
 {
     /// <summary>Creates a generator ID after validating and normalizing <paramref name="value"/>.</summary>
     public WorkspaceGeneratorId(string value) => Value = StableIdSyntax.Validate(value, nameof(value));
+
     public string Value { get; }
     public int CompareTo(WorkspaceGeneratorId other) => StringComparer.Ordinal.Compare(Value, other.Value);
     public static bool operator <(WorkspaceGeneratorId left, WorkspaceGeneratorId right) => left.CompareTo(right) < 0;
@@ -129,8 +134,10 @@ public enum DiagnosticSeverity
 {
     /// <summary>Informational output that does not affect success.</summary>
     Info,
+
     /// <summary>A recoverable condition that should be reviewed.</summary>
     Warning,
+
     /// <summary>A condition that prevents a valid result.</summary>
     Error,
 }
@@ -197,10 +204,13 @@ public interface IPlugin
 {
     /// <summary>Gets the stable plugin ID.</summary>
     PluginId Id { get; }
+
     /// <summary>Gets the plugin implementation version.</summary>
     Version Version { get; }
+
     /// <summary>Gets the capabilities exposed by the plugin.</summary>
     CapabilitySet Capabilities { get; }
+
     /// <summary>Registers plugin services for the current invocation.</summary>
     void Register(IPluginRegistry registry);
 }

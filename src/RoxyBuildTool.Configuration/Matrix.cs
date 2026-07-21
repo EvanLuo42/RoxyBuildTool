@@ -43,7 +43,10 @@ public sealed class MatrixBuilder
     }
 
     /// <summary>Creates an immutable matrix definition.</summary>
-    public MatrixDefinition Build() => new(_axes.ToImmutableArray(), _constraints.ToImmutableArray());
+    public MatrixDefinition Build()
+    {
+        return new MatrixDefinition([.._axes], [.._constraints]);
+    }
 
     private void AddAxis(FragmentValue[] values, Type? enumType)
     {
@@ -55,16 +58,17 @@ public sealed class MatrixBuilder
         var fragment = values.First().Fragment;
         if (values.Any(value => value.Fragment != fragment))
         {
-            throw new ArgumentException("Every value in a matrix axis must belong to the same fragment.", nameof(values));
+            throw new ArgumentException("Every value in a matrix axis must belong to the same fragment.",
+                nameof(values));
         }
 
         if (_axes.Any(axis => axis.Fragment == fragment))
         {
-            throw new FragmentException(new("RBT1101", DiagnosticSeverity.Error,
+            throw new FragmentException(new Diagnostic("RBT1101", DiagnosticSeverity.Error,
                 $"Matrix contains duplicate axis '{fragment}'."));
         }
 
-        _axes.Add(new(fragment, values.Distinct().Order().ToImmutableArray(), enumType));
+        _axes.Add(new MatrixAxis(fragment, [..values.Distinct().Order()], enumType));
     }
 }
 
@@ -143,7 +147,7 @@ public sealed class MatrixResolver(FragmentRegistry registry)
 
         foreach (var selector in selectors.Keys.Where(selector => matrix.Axes.All(axis => axis.Fragment != selector)))
         {
-            throw new FragmentException(new("RBT1103", DiagnosticSeverity.Error,
+            throw new FragmentException(new Diagnostic("RBT1103", DiagnosticSeverity.Error,
                 $"Selector references fragment '{selector}', which is not an axis of this matrix."));
         }
 
@@ -151,7 +155,7 @@ public sealed class MatrixResolver(FragmentRegistry registry)
         var excluded = ImmutableArray.CreateBuilder<ExcludedConfiguration>();
         var candidates = 0;
         Expand(0, new Dictionary<FragmentId, FragmentValue>());
-        return new(completed.Order().ToImmutableArray(), excluded.ToImmutable(), candidates);
+        return new MatrixResolution([..completed.Order()], excluded.ToImmutable(), candidates);
 
         void Expand(int axisIndex, Dictionary<FragmentId, FragmentValue> assigned)
         {
