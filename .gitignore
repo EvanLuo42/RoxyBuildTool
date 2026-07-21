@@ -13,3 +13,4 @@ TestResults/
 .idea/
 /docs/api/
 /docs/_site/
+BenchmarkDotNet.Artifacts/

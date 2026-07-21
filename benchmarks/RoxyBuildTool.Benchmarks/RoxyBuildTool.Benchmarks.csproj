@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <IsPackable>false</IsPackable>
+        <Description>Production-path performance benchmarks for RoxyBuildTool.</Description>
+    </PropertyGroup>
+    <ItemGroup>
+        <PackageReference Include="BenchmarkDotNet"/>
+        <ProjectReference Include="../../src/RoxyBuildTool.Configuration/RoxyBuildTool.Configuration.csproj"/>
+        <ProjectReference Include="../../src/RoxyBuildTool.Graph/RoxyBuildTool.Graph.csproj"/>
+        <ProjectReference Include="../../src/RoxyBuildTool.Generators.CompilationDatabase/RoxyBuildTool.Generators.CompilationDatabase.csproj"/>
+        <ProjectReference Include="../../src/RoxyBuildTool.Generators.VisualStudio/RoxyBuildTool.Generators.VisualStudio.csproj"/>
+    </ItemGroup>
+</Project>

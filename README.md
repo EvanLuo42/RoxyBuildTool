@@ -99,6 +99,20 @@ dotnet tool restore
 dotnet docfx docs/docfx.json
 ```
 
+## Performance benchmarks
+
+The BenchmarkDotNet suite exercises configuration expansion, dependency and usage
+propagation, action lowering, workspace assembly, and Visual Studio/compilation database
+generation with production-shaped workloads, including 1000-module and 16-variant
+game-engine-scale scenarios.
+
+```powershell
+dotnet run --project benchmarks/RoxyBuildTool.Benchmarks -c Release -- --filter "*"
+```
+
+See [the benchmark guide](benchmarks/RoxyBuildTool.Benchmarks/README.md) for focused and
+short-run commands and a description of each workload.
+
 ## License
 
 RoxyBuildTool is licensed under the [MIT License](LICENSE).

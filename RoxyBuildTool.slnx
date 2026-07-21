@@ -18,4 +18,7 @@
     <Project Path="tests/RoxyBuildTool.IntegrationTests/RoxyBuildTool.IntegrationTests.csproj" />
     <Project Path="tests/RoxyBuildTool.FakeMsBuild/RoxyBuildTool.FakeMsBuild.csproj" />
   </Folder>
+  <Folder Name="/benchmarks/">
+    <Project Path="benchmarks/RoxyBuildTool.Benchmarks/RoxyBuildTool.Benchmarks.csproj"/>
+  </Folder>
 </Solution>
