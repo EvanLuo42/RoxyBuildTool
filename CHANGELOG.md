@@ -7,11 +7,19 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-07-23
+
+### Changed
+
+- Changed generated build directories to PascalCase names, including the `Binaries` and `Intermediate` roots.
+- Changed release publishing from GitHub Packages to NuGet.org using Trusted Publishing.
+
 ## [0.1.0] - 2026-07-21
 
 ### Added
 
 - Initial Windows MVP for describing C++ builds with typed C# rules and generating Visual Studio 2022 and `compile_commands.json` workspaces.
 
-[Unreleased]: https://github.com/EvanLuo42/RoxyBuildTool/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/EvanLuo42/RoxyBuildTool/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/EvanLuo42/RoxyBuildTool/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/EvanLuo42/RoxyBuildTool/releases/tag/v0.1.0
