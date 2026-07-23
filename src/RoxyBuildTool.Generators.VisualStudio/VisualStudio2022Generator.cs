@@ -197,7 +197,8 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator, IWorkspaceG
             var outputRoot =
                 $@"$(RoxyWorkspaceRoot)\{ToWindows(BuildPathLayout.OutputRoot(variant.Configuration, variant.Target))}\";
             var intermediate =
-                $@"$(RoxyWorkspaceRoot)\{ToWindows(BuildPathLayout.IntermediateRoot(variant.Configuration, variant.Target))}\{variant.Module.Id}\";
+                $@"$(RoxyWorkspaceRoot)\{ToWindows(BuildPathLayout.IntermediateRoot(
+                    variant.Configuration, variant.Target, variant.Module.Id))}\";
 
             StartMsBuild(writer, "PropertyGroup");
             writer.WriteAttributeString("Condition", Condition(variant));

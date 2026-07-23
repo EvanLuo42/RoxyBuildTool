@@ -9,6 +9,19 @@ namespace RoxyBuildTool.Graph.Tests;
 public sealed class ActionGraphLowererBoundaryTests
 {
     [Fact]
+    public void GeneratedDirectoryNamesUsePascalCase()
+    {
+        var configuration = DependencyResolverBoundaryTests.Configuration();
+
+        Assert.Equal(
+            $"Binaries/Windows/X64/Development/{configuration.ShortHash}/GameClient",
+            BuildPathLayout.OutputRoot(configuration, "game-client"));
+        Assert.Equal(
+            $"Intermediate/{configuration.ShortHash}/GameClient/RenderCore",
+            BuildPathLayout.IntermediateRoot(configuration, "game-client", "render-core"));
+    }
+
+    [Fact]
     public void NativeLoweringCoversEveryOutputKindAndRuntimeStagingBoundary()
     {
         var configuration = DependencyResolverBoundaryTests.Configuration();

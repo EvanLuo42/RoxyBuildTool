@@ -168,15 +168,20 @@ public static class BuildPathLayout
 {
     public static string OutputRoot(ConfigurationKey configuration, string target)
     {
-        var platform = Fragment(configuration, "Platform").ToLowerInvariant();
-        var architecture = Fragment(configuration, "Architecture").ToLowerInvariant();
-        var profile = Fragment(configuration, "Profile").ToLowerInvariant();
-        return $"out/{platform}/{architecture}/{profile}/{configuration.ShortHash}/{target}";
+        var platform = DirectoryName(Fragment(configuration, "Platform"));
+        var architecture = DirectoryName(Fragment(configuration, "Architecture"));
+        var profile = DirectoryName(Fragment(configuration, "Profile"));
+        return $"Binaries/{platform}/{architecture}/{profile}/{configuration.ShortHash}/{DirectoryName(target)}";
     }
 
     public static string IntermediateRoot(ConfigurationKey configuration, string target)
     {
-        return $"intermediate/{configuration.ShortHash}/{target}";
+        return $"Intermediate/{configuration.ShortHash}/{DirectoryName(target)}";
+    }
+
+    public static string IntermediateRoot(ConfigurationKey configuration, string target, string module)
+    {
+        return $"{IntermediateRoot(configuration, target)}/{DirectoryName(module)}";
     }
 
     public static string ObjectFile(
@@ -196,7 +201,7 @@ public static class BuildPathLayout
         LogicalPath source,
         string sourceToken)
     {
-        return $"{IntermediateRoot(configuration, target)}/{module}/{SanitizedStem(source)}-" +
+        return $"{IntermediateRoot(configuration, target, module)}/{SanitizedStem(source)}-" +
                $"{sourceToken}.obj";
     }
 
@@ -217,7 +222,7 @@ public static class BuildPathLayout
         LogicalPath source,
         string sourceToken)
     {
-        return $"{IntermediateRoot(configuration, target)}/{module}/{SanitizedStem(source)}-" +
+        return $"{IntermediateRoot(configuration, target, module)}/{SanitizedStem(source)}-" +
                $"{sourceToken}.res";
     }
 
@@ -226,7 +231,7 @@ public static class BuildPathLayout
         string target,
         string module)
     {
-        return $"{IntermediateRoot(configuration, target)}/{module}/{module}.pch";
+        return $"{IntermediateRoot(configuration, target, module)}/{module}.pch";
     }
 
     public static string StableToken(string value, int length = 12)
@@ -252,6 +257,8 @@ public static class BuildPathLayout
     {
         return configuration.Values.Single(value => value.Fragment.Value == fragment).Value;
     }
+
+    private static string DirectoryName(string value) => ConfigurationlessPascalCase.Normalize(value);
 
     private static string SanitizedStem(LogicalPath source)
     {

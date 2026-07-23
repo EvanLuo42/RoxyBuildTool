@@ -300,9 +300,11 @@ Default output layout:
   cache/v1/generation/<request-content-hash>.json
   generated/<generator>/<workspace>/
   manifests/<request-hash>.json
-out/<platform>/<architecture>/<profile>/<configuration-hash>/<target>/
-intermediate/<configuration-hash>/<target>/
+Binaries/<platform>/<architecture>/<profile>/<configuration-hash>/<target>/
+Intermediate/<configuration-hash>/<target>/
 ```
+
+Generated build-directory names use PascalCase. The `.roxy` internal layout and opaque hash segments retain their existing canonical casing.
 
 Determinism rules:
 

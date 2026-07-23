@@ -7,7 +7,6 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 concurrency:
   group: release-${{ github.ref }}
@@ -59,9 +58,13 @@ jobs:
       - name: Publish packages
         shell: pwsh
         env:
-          NUGET_API_KEY: ${{ secrets.GITHUB_TOKEN }}
-          NUGET_SOURCE: https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+          NUGET_SOURCE: https://api.nuget.org/v3/index.json
         run: |
+          if ([string]::IsNullOrWhiteSpace($env:NUGET_API_KEY)) {
+            throw "Repository secret 'NUGET_API_KEY' is not configured."
+          }
+
           $packages = @(Get-ChildItem -LiteralPath artifacts/packages -Filter *.nupkg -File | Sort-Object Name)
           if ($packages.Count -eq 0) {
             throw "No NuGet packages were found in artifacts/packages."

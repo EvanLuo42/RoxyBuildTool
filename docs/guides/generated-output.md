@@ -18,11 +18,12 @@ Generated IDE and compilation-database files are projections of the rules model.
     Vs2022/<workspace>/
     CompileDb/<workspace>/
   manifests/<request-hash>.json
-out/<platform>/<architecture>/<profile>/<configuration-hash>/<target>/
-intermediate/<configuration-hash>/<target>/
+Binaries/<platform>/<architecture>/<profile>/<configuration-hash>/<target>/
+Intermediate/<configuration-hash>/<target>/
 ```
 
 All paths in the model are workspace-relative and use `/` as the logical separator. Generators convert them to the syntax required by their output format.
+Generated build-directory names use PascalCase. The `.roxy` internal layout and opaque hash segments retain their existing canonical casing.
 
 ## Visual Studio
 
