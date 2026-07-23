@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 concurrency:
   group: release-${{ github.ref }}
@@ -55,16 +56,18 @@ jobs:
       - name: Pack
         run: dotnet pack RoxyBuildTool.slnx --configuration Release --no-build --output artifacts/packages -p:PackageVersion=${{ steps.metadata.outputs.version }}
 
+      - name: Log in to NuGet.org
+        id: login
+        uses: NuGet/login@v1
+        with:
+          user: ${{ secrets.NUGET_USER }}
+
       - name: Publish packages
         shell: pwsh
         env:
-          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+          NUGET_API_KEY: ${{ steps.login.outputs.NUGET_API_KEY }}
           NUGET_SOURCE: https://api.nuget.org/v3/index.json
         run: |
-          if ([string]::IsNullOrWhiteSpace($env:NUGET_API_KEY)) {
-            throw "Repository secret 'NUGET_API_KEY' is not configured."
-          }
-
           $packages = @(Get-ChildItem -LiteralPath artifacts/packages -Filter *.nupkg -File | Sort-Object Name)
           if ($packages.Count -eq 0) {
             throw "No NuGet packages were found in artifacts/packages."
