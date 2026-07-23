@@ -20,8 +20,8 @@
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Development-3aef536a1c9e|x64'">
-      <OutDir>$(RoxyWorkspaceRoot)\Binaries\Windows\X64\Development\3aef536a1c9e\Mini\</OutDir>
-      <IntDir>$(RoxyWorkspaceRoot)\Intermediate\3aef536a1c9e\Mini\Mini\</IntDir>
+    <OutDir>$(RoxyWorkspaceRoot)\Binaries\Windows\X64\Development\3aef536a1c9e\Mini\</OutDir>
+    <IntDir>$(RoxyWorkspaceRoot)\Intermediate\3aef536a1c9e\Mini\Mini\</IntDir>
     <TargetName>mini</TargetName>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Development-3aef536a1c9e|x64'">
@@ -37,7 +37,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="..\..\..\..\src\mini.cpp">
-        <ObjectFileName Condition="'$(Configuration)|$(Platform)'=='Development-3aef536a1c9e|x64'">$(RoxyWorkspaceRoot)\Intermediate\3aef536a1c9e\Mini\Mini\mini-2de5afdad880.obj</ObjectFileName>
+      <ObjectFileName Condition="'$(Configuration)|$(Platform)'=='Development-3aef536a1c9e|x64'">$(RoxyWorkspaceRoot)\Intermediate\3aef536a1c9e\Mini\Mini\mini-2de5afdad880.obj</ObjectFileName>
     </ClCompile>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
