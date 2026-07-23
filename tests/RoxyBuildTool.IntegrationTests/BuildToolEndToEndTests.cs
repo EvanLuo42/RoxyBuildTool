@@ -24,9 +24,9 @@ public sealed class BuildToolEndToEndTests
         Assert.Equal(0, firstExit);
         Assert.Contains("write .roxy", firstOutput.ToString(), StringComparison.Ordinal);
         var solution = workspace.File(".roxy/generated/vs2022/integration/IntegrationWorkspace.sln");
-        var nativeProject = workspace.File(".roxy/generated/vs2022/integration/IntegrationNative.Integration.vcxproj");
+        var nativeProject = workspace.File(".roxy/generated/vs2022/integration/IntegrationNative.vcxproj");
         var commands = workspace.File(".roxy/generated/CompileDb/integration/compile_commands.json");
-        Assert.Contains("Development Editor-", solution, StringComparison.Ordinal);
+        Assert.Contains("Development Editor|Win64", solution, StringComparison.Ordinal);
         Assert.Contains("keep.cpp", nativeProject, StringComparison.Ordinal);
         Assert.Contains("nested.cpp", nativeProject, StringComparison.Ordinal);
         Assert.DoesNotContain("excluded.cpp", nativeProject, StringComparison.Ordinal);
@@ -63,7 +63,7 @@ public sealed class BuildToolEndToEndTests
 
         var nativeProjectPath = Path.Combine(
             workspace.Path,
-            ".roxy/generated/vs2022/integration/IntegrationNative.Integration.vcxproj");
+            ".roxy/generated/vs2022/integration/IntegrationNative.vcxproj");
         File.WriteAllText(nativeProjectPath, "tampered");
         using var repairedOutput = new StringWriter();
         Assert.Equal(0, await App([], workspace.Path, repairedOutput)
@@ -103,7 +103,7 @@ public sealed class BuildToolEndToEndTests
             .RunAsync(TestContext.Current.CancellationToken));
 
         var nativeProject = workspace.File(
-            ".roxy/generated/vs2022/integration/IntegrationNative.Integration.vcxproj");
+            ".roxy/generated/vs2022/integration/IntegrationNative.vcxproj");
         Assert.Contains("added.cpp", nativeProject, StringComparison.Ordinal);
         Assert.True(Directory.GetFiles(Path.Combine(cacheRoot, "actions"), "*.bin").Length >
                     actions.Length);
@@ -114,7 +114,7 @@ public sealed class BuildToolEndToEndTests
         Assert.Equal(0, await App([], workspace.Path, new StringWriter())
             .RunAsync(TestContext.Current.CancellationToken));
         Assert.Contains("filtered-added.cpp", workspace.File(
-                ".roxy/generated/vs2022/integration/IntegrationNative.Integration.vcxproj"),
+                ".roxy/generated/vs2022/integration/IntegrationNative.vcxproj"),
             StringComparison.Ordinal);
     }
 
@@ -255,14 +255,13 @@ public sealed class BuildToolEndToEndTests
             .WithMsBuild(fakeMsBuild)
             .RunAsync(TestContext.Current.CancellationToken);
 
-        Assert.Equal(0, exitCode);
+        Assert.True(exitCode == 0, output.ToString());
         var arguments = File.ReadAllLines(Path.Combine(workspace.Path, ".roxy", "fake-msbuild.args"));
         Assert.EndsWith("IntegrationWorkspace.IntegrationTarget.Build.sln", arguments[0], StringComparison.Ordinal);
         Assert.Contains("/m", arguments);
         Assert.Contains("/restore", arguments);
         Assert.Contains("/t:Build", arguments);
-        Assert.Contains(arguments, argument =>
-            argument.StartsWith("/p:Configuration=Development Client-", StringComparison.Ordinal));
+        Assert.Contains("/p:Configuration=Development Client", arguments);
         Assert.Contains("/p:Platform=Win64", arguments);
         Assert.Contains("/verbosity:minimal", arguments);
 
@@ -276,8 +275,7 @@ public sealed class BuildToolEndToEndTests
 
         Assert.Equal(0, editorExitCode);
         Assert.NotEqual(arguments[0], editorArguments[0]);
-        Assert.Contains(editorArguments, argument =>
-            argument.StartsWith("/p:Configuration=Development Editor-", StringComparison.Ordinal));
+        Assert.Contains("/p:Configuration=Development Editor", editorArguments);
     }
 
     [Fact]

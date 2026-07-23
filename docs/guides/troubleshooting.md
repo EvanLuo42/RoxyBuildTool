@@ -26,7 +26,7 @@ dotnet pack RoxyBuildTool.slnx --configuration Release --no-build --output artif
 dotnet restore samples/WindowsMvp/Build/RoxyBuild.csproj --force-evaluate
 ```
 
-During local development, repacking the same `0.1.0` version does not replace an already expanded package in `artifacts/sample-packages`. Use a fresh `RestorePackagesPath` or remove only that generated package cache before restoring again.
+During local development, repacking the same package version does not replace an already expanded package in `artifacts/sample-packages`. Use a fresh `RestorePackagesPath` or remove only that generated package cache before restoring again.
 
 ## Generation reports an unknown workspace generator
 

@@ -16,7 +16,7 @@ public sealed partial class GeneratorGoldenTests
         var model = Workspace();
         var result = new VisualStudio2022Generator().Generate(model,
             new("C:/checkout", new(".roxy/generated/vs2022/mini")));
-        var actual = result.Files.Single(file => file.Path.Value == "MiniNative.vcxproj").Content;
+        var actual = result.Files.Single(file => file.Path.Value == "Mini.vcxproj").Content;
         actual = ProjectGuidPattern().Replace(actual, "<ProjectGuid>{GUID}</ProjectGuid>");
 
         Assert.Equal(ReadGolden("mini.vcxproj"), actual);
@@ -49,6 +49,48 @@ public sealed partial class GeneratorGoldenTests
     }
 
     [Fact]
+    public void ConfigurationNamesHideHashesAndUseReadableQualifiersForCollisions()
+    {
+        var modular = ConfigurationWithLinkModel(LinkModels.Modular);
+        var monolithic = ConfigurationWithLinkModel(LinkModels.Monolithic);
+        var module = Module("game", "Game", "Game/Main.cpp");
+        var project = new WorkspaceProject(
+            "game",
+            [new("game", modular, module), new("game", monolithic, module)]);
+        var model = new WorkspaceModel("Collisions", "game", [project], [], []);
+
+        var result = new VisualStudio2022Generator().Generate(model,
+            new("C:/checkout", new(".roxy/generated/vs2022/collisions")));
+        var solution = result.Files.Single(file => file.Path.Value == "Collisions.sln").Content;
+
+        Assert.Contains("Development (LinkModel=Modular)|Win64", solution, StringComparison.Ordinal);
+        Assert.Contains("Development (LinkModel=Monolithic)|Win64", solution, StringComparison.Ordinal);
+        Assert.DoesNotContain(modular.ShortHash, solution, StringComparison.Ordinal);
+        Assert.DoesNotContain(monolithic.ShortHash, solution, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SharedModuleKeepsSameConfigurationDistinctAcrossTargets()
+    {
+        var configuration = ConfigurationWithLinkModel(LinkModels.Modular);
+        var module = Module("Core", "IgnoredDisplayName", "Core/Main.cpp");
+        var project = new WorkspaceProject(
+            "Core",
+            [new("Editor", configuration, module), new("Game", configuration, module)]);
+        var model = new WorkspaceModel("Shared", "Game", [project], [], []);
+
+        var result = new VisualStudio2022Generator().Generate(model,
+            new("C:/checkout", new(".roxy/generated/vs2022/shared")));
+        var nativeProject = result.Files.Single(file => file.Path.Value == "Core.vcxproj").Content;
+        var solution = result.Files.Single(file => file.Path.Value == "Shared.sln").Content;
+
+        Assert.Contains("Development (Target=Editor)|x64", nativeProject, StringComparison.Ordinal);
+        Assert.Contains("Development (Target=Game)|x64", nativeProject, StringComparison.Ordinal);
+        Assert.Contains("Development (Target=Editor)|Win64", solution, StringComparison.Ordinal);
+        Assert.Contains("Development (Target=Game)|Win64", solution, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void UnsupportedSolutionConfigurationMapsToExistingProjectConfiguration()
     {
         var clientConfiguration = GameConfiguration("client");
@@ -57,10 +99,8 @@ public sealed partial class GeneratorGoldenTests
         var editorModule = Module("editor", "Editor", "Editor/Main.cpp");
         var projects = new[]
         {
-            new WorkspaceProject("editor", "Editor",
-                [new("editor", editorConfiguration, editorModule)], []),
-            new WorkspaceProject("game", "Game",
-                [new("game", clientConfiguration, gameModule)], []),
+            new WorkspaceProject("editor", [new("editor", editorConfiguration, editorModule)]),
+            new WorkspaceProject("game", [new("game", clientConfiguration, gameModule)]),
         };
         var model = new WorkspaceModel("Mapped", "game", [.. projects],
         [
@@ -102,8 +142,7 @@ public sealed partial class GeneratorGoldenTests
             "mini:compile", BuildActionKind.Compile, "cl.exe", ["/c", "src/mini.cpp"], new("."),
             ["src/mini.cpp"], ["intermediate/mini.obj"], [], [], true, true, []);
         var actions = new ActionGraph(configuration, "mini", [compile], []);
-        var project = new WorkspaceProject("mini", "MiniNative",
-            [new("mini", configuration, module)], []);
+        var project = new WorkspaceProject("mini", [new("mini", configuration, module)]);
         return new("Mini", "mini", [project], [configured], [actions]);
     }
 
@@ -114,6 +153,14 @@ public sealed partial class GeneratorGoldenTests
         Configuration.Toolchains.Msvc,
         LinkModels.Modular,
         new(new("Game.Flavor"), flavor),
+    ]);
+
+    private static ConfigurationKey ConfigurationWithLinkModel(FragmentValue linkModel) => new([
+        Platforms.Windows,
+        Architectures.X64,
+        BuildProfiles.Development,
+        Configuration.Toolchains.Msvc,
+        linkModel,
     ]);
 
     private static ConfiguredModule Module(string id, string name, string source) => new(

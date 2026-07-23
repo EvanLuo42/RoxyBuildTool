@@ -233,13 +233,12 @@ Commands remain structured until execution or generator output. Shell quoting is
 
 ### Workspace model
 
-`WorkspaceAssembler` groups configured module variants into projects. A project contains:
+`WorkspaceAssembler` groups every configured target/configuration variant of a module into one project. A project contains only:
 
-- Stable project identity and presentation name.
+- The module's stable identity.
 - Target/configuration variants.
-- Project dependencies with the exact target/configuration variants in which each edge exists.
 
-The model includes the configured and action graphs consumed by workspace generators. Generators therefore do not need to re-resolve rules.
+Project references are derived directly from each variant's configured module dependencies. The model also includes the configured and action graphs consumed by workspace generators, so generators do not need to re-resolve rules.
 
 ## Toolchains and platforms
 

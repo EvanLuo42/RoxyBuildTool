@@ -287,7 +287,7 @@ public static class BuildConfigurationNames
             .Where(value => value.Fragment.Value is not
                 ("Platform" or "Architecture" or "Profile" or "Toolchain" or "LinkModel"))
             .Select(value => ToPascalCase(value.Value));
-        return $"{string.Join(' ', new[] { ToPascalCase(profile) }.Concat(custom))}-{configuration.ShortHash}";
+        return string.Join(' ', new[] { ToPascalCase(profile) }.Concat(custom));
     }
 
     private static string ToPascalCase(string value)
@@ -802,19 +802,10 @@ public sealed record WorkspaceProjectVariant(
     ConfigurationKey Configuration,
     ConfiguredModule Module);
 
-/// <summary>Records that a project reference exists for one consumer variant.</summary>
-public sealed record WorkspaceProjectDependencyVariant(
-    string Target,
-    ConfigurationKey Configuration,
-    string ProjectId);
-
-/// <summary>Represents one generated or imported project in a workspace.</summary>
+/// <summary>Groups every target/configuration variant of one module into a workspace project.</summary>
 public sealed record WorkspaceProject(
     string Id,
-    string Name,
-    ImmutableArray<WorkspaceProjectVariant> Variants,
-    ImmutableArray<string> ProjectDependencies,
-    ImmutableArray<WorkspaceProjectDependencyVariant> DependencyVariants = default);
+    ImmutableArray<WorkspaceProjectVariant> Variants);
 
 /// <summary>Contains the generator-neutral representation of a complete workspace.</summary>
 public sealed record WorkspaceModel(

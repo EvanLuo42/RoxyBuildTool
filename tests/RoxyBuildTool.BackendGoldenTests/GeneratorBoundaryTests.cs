@@ -23,7 +23,10 @@ public sealed class GeneratorBoundaryTests
             ["include/header.h", "src/header-metadata.cpp"]);
         var objects = Module("objects", "Objects", ModuleKind.ObjectLibrary,
             ["src/z.cpp", "src/a.cpp", "resources/objects.rc"]);
-        var library = Module("library", "Library", ModuleKind.StaticLibrary, ["src/library.cpp"]);
+        var library = Module("library", "Library", ModuleKind.StaticLibrary, ["src/library.cpp"]) with
+        {
+            Dependencies = [new("objects", DependencyVisibility.Private)],
+        };
         var shared = Module("shared", "Shared", ModuleKind.SharedLibrary, ["src/shared.cpp"]);
         var debugExecutable = Module("application", "Application", ModuleKind.Executable,
                 ["src/main.cpp", "resources/application.rc"]) with
@@ -33,6 +36,7 @@ public sealed class GeneratorBoundaryTests
                     [new("APP=1", "test")],
                     [new("out/library.lib", "test")],
                     []),
+                Dependencies = [new("library", DependencyVisibility.Private)],
             };
         var releaseExecutable = debugExecutable with
         {
@@ -40,12 +44,11 @@ public sealed class GeneratorBoundaryTests
         };
         var projects = new[]
         {
-            Project("header", "HeaderModule", [new("app", debug, header)]),
-            Project("objects", "Objects", [new("app", debug, objects)]),
-            Project("library", "Library", [new("app", debug, library)], ["objects"]),
-            Project("shared", "Shared", [new("app", debug, shared)]),
-            Project("application", "Application",
-                [new("app", debug, debugExecutable), new("app", release, releaseExecutable)], ["library"]),
+            Project("header", [new("app", debug, header)]),
+            Project("objects", [new("app", debug, objects)]),
+            Project("library", [new("app", debug, library)]),
+            Project("shared", [new("app", debug, shared)]),
+            Project("application", [new("app", debug, debugExecutable), new("app", release, releaseExecutable)]),
         };
         var model = new WorkspaceModel("Native", "app", [.. projects], [], []);
 
@@ -131,7 +134,7 @@ public sealed class GeneratorBoundaryTests
                     new LogicalPath("include/pch.h"), new LogicalPath("src/pch.cpp"), "CustomGame")
             };
         var model = new WorkspaceModel("Advanced", "app",
-            [Project("application", "Application", [new WorkspaceProjectVariant("app", configuration, module)])], [],
+            [Project("application", [new WorkspaceProjectVariant("app", configuration, module)])], [],
             []);
 
         var project = Parse(Generator().Generate(model, Context("advanced")), "Application.vcxproj");
@@ -178,11 +181,9 @@ public sealed class GeneratorBoundaryTests
         };
         var releaseApplication = debugApplication with { Dependencies = [] };
         var applicationProject = new WorkspaceProject(
-            "application", "Application",
-            [new("app", debug, debugApplication), new("app", release, releaseApplication)],
-            ["library"],
-            DependencyVariants: [new("app", debug, "library")]);
-        var libraryProject = Project("library", "Library", [new("app", debug, library), new("app", release, library)]);
+            "application",
+            [new("app", debug, debugApplication), new("app", release, releaseApplication)]);
+        var libraryProject = Project("library", [new("app", debug, library), new("app", release, library)]);
         var settings = new ToolchainBuildSettings("Msvc", "vCustom", ["/WX"], ["/OPT:REF"]);
         var model = new WorkspaceModel("Conditional", "app", [applicationProject, libraryProject], [],
         [
@@ -208,30 +209,35 @@ public sealed class GeneratorBoundaryTests
     }
 
     [Fact]
-    public void ProjectFileNamesAreSanitizedWithFallbackAndModuleSuffixRemoval()
+    public void ProjectFileNamesUsePascalCaseModuleIds()
     {
         var configuration = Configuration(BuildProfiles.Development);
-        var first = Module("FallbackName", "!!!", ModuleKind.StaticLibrary, ["first.cpp"]);
-        var second = Module("suffix", "CleanModule", ModuleKind.StaticLibrary, ["second.cpp"]);
+        var first = Module("Fallback.Name", "!!!", ModuleKind.StaticLibrary, ["first.cpp"]);
+        var second = Module("Suffix", "CleanModule", ModuleKind.StaticLibrary, ["second.cpp"]);
         var result = Generator().Generate(new("Names", "target",
         [
-            Project("FallbackName", "!!!", [new("target", configuration, first)]),
-            Project("suffix", "CleanModule", [new("target", configuration, second)]),
+            Project("Fallback.Name", [new("target", configuration, first)]),
+            Project("Suffix", [new("target", configuration, second)]),
         ], [], []), Context("names"));
 
         Assert.Contains(result.Files, file => file.Path.Value == "FallbackName.vcxproj");
-        Assert.Contains(result.Files, file => file.Path.Value == "Clean.vcxproj");
+        Assert.Contains(result.Files, file => file.Path.Value == "Suffix.vcxproj");
     }
 
     [Fact]
-    public void UnknownProjectDependencyFailsFast()
+    public void MissingDisabledProjectDependencyIsIgnored()
     {
         var configuration = Configuration(BuildProfiles.Development);
-        var valid = Module("valid", "Valid", ModuleKind.StaticLibrary, ["valid.cpp"]);
-        Assert.Throws<KeyNotFoundException>(() => Generator().Generate(
-            new("Missing", "target", [Project("valid", "Valid", [new("target", configuration, valid)], ["missing"])],
+        var valid = Module("valid", "Valid", ModuleKind.StaticLibrary, ["valid.cpp"]) with
+        {
+            Dependencies = [new("missing", DependencyVisibility.Private)],
+        };
+        var result = Generator().Generate(
+            new("Missing", "target", [Project("valid", [new("target", configuration, valid)])],
                 [], []),
-            Context("missing")));
+            Context("missing"));
+
+        Assert.Empty(Parse(result, "Valid.vcxproj").Descendants(MsBuild + "ProjectReference"));
     }
 
     [Fact]
@@ -325,10 +331,7 @@ public sealed class GeneratorBoundaryTests
 
     private static WorkspaceProject Project(
         string id,
-        string name,
-        ImmutableArray<WorkspaceProjectVariant> variants,
-        ImmutableArray<string> dependencies = default) => new(
-        id, name, variants, dependencies.IsDefault ? [] : dependencies);
+        ImmutableArray<WorkspaceProjectVariant> variants) => new(id, variants);
 
     private static string ConfigurationType(GenerationResult result, string path) =>
         Assert.Single(Parse(result, path).Descendants(MsBuild + "ConfigurationType").Select(element => element.Value)

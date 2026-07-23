@@ -79,10 +79,10 @@ A consuming repository uses a small SDK-style console project. Reference the fac
 
 ```xml
 <ItemGroup>
-  <PackageReference Include="RoxyBuildTool" Version="0.1.0" />
-  <PackageReference Include="RoxyBuildTool.Platforms.Windows" Version="0.1.0" />
-  <PackageReference Include="RoxyBuildTool.Generators.VisualStudio" Version="0.1.0" />
-  <PackageReference Include="RoxyBuildTool.Generators.CompilationDatabase" Version="0.1.0" />
+  <PackageReference Include="RoxyBuildTool" Version="0.1.2" />
+  <PackageReference Include="RoxyBuildTool.Platforms.Windows" Version="0.1.2" />
+  <PackageReference Include="RoxyBuildTool.Generators.VisualStudio" Version="0.1.2" />
+  <PackageReference Include="RoxyBuildTool.Generators.CompilationDatabase" Version="0.1.2" />
 </ItemGroup>
 ```
 

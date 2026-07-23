@@ -29,12 +29,12 @@ Generated build-directory names use PascalCase. The `.roxy` internal layout and 
 
 The Visual Studio generator writes:
 
-- A solution containing one project per target/module pair.
+- A solution containing one project per module, with target/configuration variants represented as project configurations.
 - `.vcxproj` and `.vcxproj.filters` files for C++ modules.
 
 The generated solution never contains C# projects, including the project-local rules host.
 
-Human-readable solution configuration names are derived from the profile and custom fragments and include a short canonical hash so configurations that differ only by toolchain or link model cannot collide. Internal configuration identity remains the full canonical key.
+Human-readable solution configuration names are derived from the profile and custom fragments without exposing the internal hash. If two configurations would otherwise have the same name, readable fragment qualifiers distinguish them. Internal configuration identity remains the full canonical key.
 
 The `build` command uses a separate target-scoped solution under `.roxy/generated/Vs2022`. It does not replace the complete workspace solution an IDE may already have open.
 

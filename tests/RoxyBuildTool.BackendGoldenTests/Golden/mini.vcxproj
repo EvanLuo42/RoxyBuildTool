@@ -1,30 +1,30 @@
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
-    <ProjectConfiguration Include="Development-3aef536a1c9e|x64">
-      <Configuration>Development-3aef536a1c9e</Configuration>
+    <ProjectConfiguration Include="Development|x64">
+      <Configuration>Development</Configuration>
       <Platform>x64</Platform>
     </ProjectConfiguration>
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <ProjectGuid>{GUID}</ProjectGuid>
-    <RootNamespace>MiniNative</RootNamespace>
+    <RootNamespace>Mini</RootNamespace>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
     <RoxyWorkspaceRoot>..\..\..\..</RoxyWorkspaceRoot>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
-  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Development-3aef536a1c9e|x64'" Label="Configuration">
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Development|x64'" Label="Configuration">
     <ConfigurationType>StaticLibrary</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
     <PlatformToolset>v143</PlatformToolset>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
-  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Development-3aef536a1c9e|x64'">
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Development|x64'">
     <OutDir>$(RoxyWorkspaceRoot)\Binaries\Windows\X64\Development\3aef536a1c9e\Mini\</OutDir>
     <IntDir>$(RoxyWorkspaceRoot)\Intermediate\3aef536a1c9e\Mini\Mini\</IntDir>
     <TargetName>mini</TargetName>
   </PropertyGroup>
-  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Development-3aef536a1c9e|x64'">
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Development|x64'">
     <ClCompile>
       <LanguageStandard>stdcpplatest</LanguageStandard>
       <Optimization>MaxSpeed</Optimization>
@@ -37,7 +37,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="..\..\..\..\src\mini.cpp">
-      <ObjectFileName Condition="'$(Configuration)|$(Platform)'=='Development-3aef536a1c9e|x64'">$(RoxyWorkspaceRoot)\Intermediate\3aef536a1c9e\Mini\Mini\mini-2de5afdad880.obj</ObjectFileName>
+      <ObjectFileName Condition="'$(Configuration)|$(Platform)'=='Development|x64'">$(RoxyWorkspaceRoot)\Intermediate\3aef536a1c9e\Mini\Mini\mini-2de5afdad880.obj</ObjectFileName>
     </ClCompile>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

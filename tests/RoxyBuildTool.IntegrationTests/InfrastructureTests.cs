@@ -220,7 +220,7 @@ public sealed class InfrastructureTests
             [new("src/native.cpp")], UsageRequirements.Empty, UsageRequirements.Empty,
             UsageRequirements.Empty, UsageRequirements.Empty, []);
         var model = new WorkspaceModel("Xml", "native",
-            [new("native", "Native", [new("native", configuration, module)], [])],
+            [new("native", [new("native", configuration, module)])],
             [new(configuration, new("native", "Native", ["native"]), [module], [])],
             []);
 

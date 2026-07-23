@@ -1,6 +1,5 @@
 using System.Collections.Immutable;
 using System.Globalization;
-using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Xml;
@@ -15,9 +14,6 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator, IWorkspaceG
     private const string SolutionPlatformName = "Win64";
     private const string MsBuild = "http://schemas.microsoft.com/developer/msbuild/2003";
     private static readonly Guid CxxProjectType = new("8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942");
-
-    private static readonly ConditionalWeakTable<ConfigurationKey, ConfigurationPresentation>
-        ConfigurationPresentations = new();
 
     private static readonly ToolchainBuildSettings UnknownToolchain = new("Unknown", "v143", [], []);
 
@@ -49,29 +45,35 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator, IWorkspaceG
     {
         var files = ImmutableArray.CreateBuilder<GeneratedFile>();
         var projectsById = workspace.Projects.ToDictionary(project => project.Id, StringComparer.Ordinal);
+        var configurationNames = ConfigurationNames(workspace);
         var toolchains = workspace.ActionGraphs.ToDictionary(
             graph => (graph.Target, graph.Configuration.Canonical),
             graph => graph.Toolchain ?? UnknownToolchain);
         foreach (var project in workspace.Projects)
         {
             files.Add(new GeneratedFile(new LogicalPath($"{ProjectFileStem(project)}.vcxproj"),
-                GenerateVcxproj(project, projectsById, toolchains, context)));
+                GenerateVcxproj(project, projectsById, toolchains, configurationNames, context)));
             files.Add(new GeneratedFile(new LogicalPath($"{ProjectFileStem(project)}.vcxproj.filters"),
                 GenerateFilters(project, context)));
         }
 
-        files.Add(new GeneratedFile(new LogicalPath($"{workspace.Name}.sln"), GenerateSolution(workspace, context)));
+        files.Add(new GeneratedFile(
+            new LogicalPath($"{workspace.Name}.sln"),
+            GenerateSolution(workspace, configurationNames)));
         return new GenerationResult(Id,
             [.. files.OrderBy(file => file.Path.Value, StringComparer.Ordinal)], []);
     }
 
-    private static string GenerateSolution(WorkspaceModel workspace, GenerationContext context)
+    private static string GenerateSolution(
+        WorkspaceModel workspace,
+        IReadOnlyDictionary<(string Target, string Configuration), string> configurationNames)
     {
         var builder = new StringBuilder();
         builder.AppendLine("Microsoft Visual Studio Solution File, Format Version 12.00");
         builder.AppendLine("# Visual Studio Version 17");
         builder.AppendLine("VisualStudioVersion = 17.0.31903.59");
         builder.AppendLine("MinimumVisualStudioVersion = 10.0.40219.1");
+        var projectIds = workspace.Projects.Select(project => project.Id).ToHashSet(StringComparer.Ordinal);
 
         foreach (var project in workspace.Projects.OrderBy(project => project.Id, StringComparer.Ordinal))
         {
@@ -79,7 +81,7 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator, IWorkspaceG
             var path = $"{ProjectFileStem(project)}.vcxproj";
             builder.AppendLine(CultureInfo.InvariantCulture,
                 $"Project(\"{{{CxxProjectType.ToString().ToUpperInvariant()}}}\") = \"{ProjectFileStem(project)}\", \"{path}\", \"{{{projectGuid.ToString().ToUpperInvariant()}}}\"");
-            var solutionDependencies = SolutionDependencies(project);
+            var solutionDependencies = SolutionDependencies(project, projectIds);
             if (!solutionDependencies.IsEmpty)
             {
                 builder.AppendLine("\tProjectSection(ProjectDependencies) = postProject");
@@ -96,7 +98,7 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator, IWorkspaceG
             builder.AppendLine("EndProject");
         }
 
-        var configurations = WorkspaceConfigurations(workspace);
+        var configurations = WorkspaceConfigurations(workspace, configurationNames);
         builder.AppendLine("Global");
         builder.AppendLine("\tGlobalSection(SolutionConfigurationPlatforms) = preSolution");
         foreach (var configuration in configurations)
@@ -112,10 +114,13 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator, IWorkspaceG
             var guid = ProjectGuid(project.Id).ToString().ToUpperInvariant();
             foreach (var configuration in configurations)
             {
-                var mapped = DisplayName(MapProjectConfiguration(project, configuration.Key));
+                var mapped = DisplayName(
+                    MapProjectConfiguration(project, configuration.Target, configuration.Key),
+                    configurationNames);
                 builder.AppendLine(CultureInfo.InvariantCulture,
                     $"\t\t{{{guid}}}.{configuration.Name}|{SolutionPlatformName}.ActiveCfg = {mapped}|x64");
                 if (project.Variants.Any(variant =>
+                        variant.Target == configuration.Target &&
                         variant.Configuration.Canonical == configuration.Key.Canonical))
                 {
                     builder.AppendLine(CultureInfo.InvariantCulture,
@@ -133,6 +138,7 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator, IWorkspaceG
         WorkspaceProject project,
         IReadOnlyDictionary<string, WorkspaceProject> projectsById,
         IReadOnlyDictionary<(string Target, string Configuration), ToolchainBuildSettings> toolchains,
+        IReadOnlyDictionary<(string Target, string Configuration), string> configurationNames,
         GenerationContext context)
     {
         return WriteXml(writer =>
@@ -144,7 +150,7 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator, IWorkspaceG
             writer.WriteAttributeString("Label", "ProjectConfigurations");
             foreach (var variant in project.Variants)
             {
-                var display = DisplayName(variant);
+                var display = DisplayName(variant, configurationNames);
                 StartMsBuild(writer, "ProjectConfiguration");
                 writer.WriteAttributeString("Include", $"{display}|x64");
                 WriteMsBuild(writer, "Configuration", display);
@@ -168,7 +174,7 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator, IWorkspaceG
                 var toolchain = ToolchainSettings(toolchains, variant);
                 var debugRuntime = UsesDebugRuntime(toolchain, variant.Configuration);
                 StartMsBuild(writer, "PropertyGroup");
-                writer.WriteAttributeString("Condition", Condition(variant));
+                writer.WriteAttributeString("Condition", Condition(variant, configurationNames));
                 writer.WriteAttributeString("Label", "Configuration");
                 WriteMsBuild(writer, "ConfigurationType", ConfigurationType(variant.Module.Kind));
                 WriteMsBuild(writer, "UseDebugLibraries", debugRuntime ? "true" : "false");
@@ -179,10 +185,10 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator, IWorkspaceG
 
             WriteImport(writer, "$(VCTargetsPath)\\Microsoft.Cpp.props");
             foreach (var variant in project.Variants)
-                WriteNativeVariant(writer, variant, ToolchainSettings(toolchains, variant));
+                WriteNativeVariant(writer, variant, ToolchainSettings(toolchains, variant), configurationNames);
 
-            WriteNativeSourceItemGroups(writer, project, context);
-            WriteProjectReferences(writer, project, projectsById, MsBuild);
+            WriteNativeSourceItemGroups(writer, project, configurationNames, context);
+            WriteProjectReferences(writer, project, projectsById, configurationNames, MsBuild);
             WriteImport(writer, "$(VCTargetsPath)\\Microsoft.Cpp.targets");
             writer.WriteEndElement();
         });
@@ -190,7 +196,8 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator, IWorkspaceG
         static void WriteNativeVariant(
             XmlWriter writer,
             WorkspaceProjectVariant variant,
-            ToolchainBuildSettings toolchain)
+            ToolchainBuildSettings toolchain,
+            IReadOnlyDictionary<(string Target, string Configuration), string> configurationNames)
         {
             var native = variant.Module.CxxSettings ?? CxxModuleSettings.Empty;
             var debugRuntime = UsesDebugRuntime(toolchain, variant.Configuration);
@@ -201,14 +208,14 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator, IWorkspaceG
                     variant.Configuration, variant.Target, variant.Module.Id))}\";
 
             StartMsBuild(writer, "PropertyGroup");
-            writer.WriteAttributeString("Condition", Condition(variant));
+            writer.WriteAttributeString("Condition", Condition(variant, configurationNames));
             WriteMsBuild(writer, "OutDir", outputRoot);
             WriteMsBuild(writer, "IntDir", intermediate);
             WriteMsBuild(writer, "TargetName", native.OutputName ?? variant.Module.Id);
             writer.WriteEndElement();
 
             StartMsBuild(writer, "ItemDefinitionGroup");
-            writer.WriteAttributeString("Condition", Condition(variant));
+            writer.WriteAttributeString("Condition", Condition(variant, configurationNames));
             StartMsBuild(writer, "ClCompile");
             WriteMsBuild(writer, "LanguageStandard", "stdcpplatest");
             WriteMsBuild(writer, "Optimization",
@@ -296,18 +303,22 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator, IWorkspaceG
         XmlWriter writer,
         WorkspaceProject project,
         IReadOnlyDictionary<string, WorkspaceProject> projectsById,
+        IReadOnlyDictionary<(string Target, string Configuration), string> configurationNames,
         string xmlNamespace)
     {
-        if (project.ProjectDependencies.IsEmpty) return;
+        var dependencies = ProjectDependencies(project)
+            .Where(projectsById.ContainsKey)
+            .ToImmutableArray();
+        if (dependencies.IsEmpty) return;
 
         writer.WriteStartElement(null, "ItemGroup", xmlNamespace);
-        foreach (var dependency in project.ProjectDependencies.Order(StringComparer.Ordinal))
+        foreach (var dependency in dependencies)
         {
             var dependencyProject = projectsById[dependency];
             writer.WriteStartElement(null, "ProjectReference", xmlNamespace);
             writer.WriteAttributeString("Include",
                 $"{ProjectFileStem(dependencyProject)}.vcxproj");
-            if (VariantCondition(project, ReferenceVariants(project, dependency)) is { } condition)
+            if (VariantCondition(project, ReferenceVariants(project, dependency), configurationNames) is { } condition)
                 writer.WriteAttributeString("Condition", condition);
             writer.WriteElementString(null, "Project", xmlNamespace,
                 $"{{{ProjectGuid(dependency).ToString().ToUpperInvariant()}}}");
@@ -339,7 +350,8 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator, IWorkspaceG
                 group.Select(item => item.Source).OrderBy(source => source.Value, StringComparer.Ordinal).First(),
                 [
                     .. group.Select(item => item.Variant).Distinct()
-                        .OrderBy(variant => variant.Configuration)
+                        .OrderBy(variant => variant.Target, StringComparer.Ordinal)
+                        .ThenBy(variant => variant.Configuration)
                 ],
                 BuildPathLayout.StableToken(group.Select(item => item.Source.Value)
                     .Order(StringComparer.Ordinal).First())))
@@ -349,6 +361,7 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator, IWorkspaceG
     private static void WriteNativeSourceItemGroups(
         XmlWriter writer,
         WorkspaceProject project,
+        IReadOnlyDictionary<(string Target, string Configuration), string> configurationNames,
         GenerationContext context)
     {
         foreach (var group in SourceVariants(project).GroupBy(
@@ -359,7 +372,7 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator, IWorkspaceG
             {
                 StartMsBuild(writer, group.Key);
                 writer.WriteAttributeString("Include", ToWindows(RelativeFromOutput(context, item.Source.Value)));
-                if (VariantCondition(project, item.Variants) is { } itemCondition)
+                if (VariantCondition(project, item.Variants, configurationNames) is { } itemCondition)
                     writer.WriteAttributeString("Condition", itemCondition);
 
                 if (group.Key is "ClCompile" or "ResourceCompile")
@@ -367,7 +380,11 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator, IWorkspaceG
                     foreach (var variant in item.Variants.Where(variant =>
                                  variant.Module.Kind == ModuleKind.HeaderOnly))
                     {
-                        WriteConditionalMsBuild(writer, "ExcludedFromBuild", Condition(variant), "true");
+                        WriteConditionalMsBuild(
+                            writer,
+                            "ExcludedFromBuild",
+                            Condition(variant, configurationNames),
+                            "true");
                     }
                 }
 
@@ -375,7 +392,7 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator, IWorkspaceG
                 {
                     foreach (var variant in item.Variants)
                     {
-                        var condition = Condition(variant);
+                        var condition = Condition(variant, configurationNames);
                         WriteConditionalMsBuild(writer, "ObjectFileName", condition,
                             $@"$(RoxyWorkspaceRoot)\{ToWindows(BuildPathLayout.ObjectFile(
                                 variant.Configuration, variant.Target, variant.Module.Id, item.Source,
@@ -398,7 +415,10 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator, IWorkspaceG
                 {
                     foreach (var variant in item.Variants)
                     {
-                        WriteConditionalMsBuild(writer, "ResourceOutputFileName", Condition(variant),
+                        WriteConditionalMsBuild(
+                            writer,
+                            "ResourceOutputFileName",
+                            Condition(variant, configurationNames),
                             $@"$(RoxyWorkspaceRoot)\{ToWindows(BuildPathLayout.ResourceFile(
                                 variant.Configuration, variant.Target, variant.Module.Id, item.Source,
                                 item.SourceToken))}");
@@ -422,67 +442,80 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator, IWorkspaceG
 
     private static ImmutableArray<WorkspaceProjectVariant> ReferenceVariants(
         WorkspaceProject project,
-        string dependency)
-    {
-        if (project.DependencyVariants.IsDefaultOrEmpty)
-            return project.Variants;
+        string dependency) =>
+    [
+        .. project.Variants.Where(variant => variant.Module.Dependencies
+            .Any(candidate => candidate.Module.Equals(dependency, StringComparison.Ordinal)))
+    ];
 
-        var identities = project.DependencyVariants
-            .Where(item => item.ProjectId == dependency)
-            .Select(item => (item.Target, item.Configuration))
-            .ToHashSet();
+    private static ImmutableArray<string> ProjectDependencies(WorkspaceProject project) =>
+    [
+        .. project.Variants
+            .SelectMany(variant => variant.Module.Dependencies)
+            .Select(dependency => dependency.Module)
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+    ];
+
+    private static ImmutableArray<string> SolutionDependencies(
+        WorkspaceProject project,
+        IReadOnlySet<string> projectIds)
+    {
         return
         [
-            .. project.Variants.Where(variant => identities.Contains((variant.Target, variant.Configuration)))
-        ];
-    }
-
-    private static ImmutableArray<string> SolutionDependencies(WorkspaceProject project)
-    {
-        if (project.DependencyVariants.IsDefaultOrEmpty)
-            return [.. project.ProjectDependencies.Order(StringComparer.Ordinal)];
-
-        return
-        [
-            .. project.ProjectDependencies
+            .. ProjectDependencies(project)
+                .Where(projectIds.Contains)
                 .Where(dependency => ReferenceVariants(project, dependency).Length == project.Variants.Length)
-                .Order(StringComparer.Ordinal)
         ];
     }
 
     private static string? VariantCondition(
         WorkspaceProject project,
-        ImmutableArray<WorkspaceProjectVariant> variants) => variants.Length == project.Variants.Length
+        ImmutableArray<WorkspaceProjectVariant> variants,
+        IReadOnlyDictionary<(string Target, string Configuration), string> configurationNames) =>
+        variants.Length == project.Variants.Length
         ? null
-        : string.Join(" Or ", variants.OrderBy(variant => variant.Configuration).Select(Condition));
+        : string.Join(" Or ", variants
+            .OrderBy(variant => variant.Target, StringComparer.Ordinal)
+            .ThenBy(variant => variant.Configuration)
+            .Select(variant => Condition(variant, configurationNames)));
 
-    private static ImmutableArray<SolutionConfiguration> WorkspaceConfigurations(WorkspaceModel workspace)
+    private static ImmutableArray<SolutionConfiguration> WorkspaceConfigurations(
+        WorkspaceModel workspace,
+        IReadOnlyDictionary<(string Target, string Configuration), string> configurationNames)
     {
         return
         [
             ..workspace
                 .Projects
                 .SelectMany(project => project.Variants)
-                .GroupBy(variant => variant.Configuration.Canonical, StringComparer.Ordinal)
-                .Select(group => new SolutionConfiguration(
-                    DisplayName(group.First()),
-                    group.OrderBy(variant => variant.Configuration)
-                        .ThenBy(variant => variant.Target, StringComparer.Ordinal)
-                        .First().Configuration))
+                .GroupBy(variant => (variant.Target, variant.Configuration.Canonical))
+                .Select(group =>
+                {
+                    var variant = group.First();
+                    return new SolutionConfiguration(
+                        DisplayName(variant, configurationNames),
+                        variant.Target,
+                        variant.Configuration);
+                })
                 .OrderBy(configuration => configuration.Name, StringComparer.Ordinal)
+                .ThenBy(configuration => configuration.Target, StringComparer.Ordinal)
+                .ThenBy(configuration => configuration.Key)
         ];
     }
 
     private static WorkspaceProjectVariant MapProjectConfiguration(
         WorkspaceProject project,
+        string solutionTarget,
         ConfigurationKey solutionConfiguration)
     {
         foreach (var variant in project.Variants)
-            if (variant.Configuration == solutionConfiguration)
+            if (variant.Target == solutionTarget && variant.Configuration == solutionConfiguration)
                 return variant;
 
         return project.Variants
-            .OrderByDescending(variant => SameFragment(variant.Configuration, solutionConfiguration, "Platform"))
+            .OrderByDescending(variant => variant.Target == solutionTarget)
+            .ThenByDescending(variant => SameFragment(variant.Configuration, solutionConfiguration, "Platform"))
             .ThenByDescending(variant => SameFragment(variant.Configuration, solutionConfiguration, "Architecture"))
             .ThenByDescending(variant => SameFragment(variant.Configuration, solutionConfiguration, "Profile"))
             .ThenByDescending(variant => SameFragment(variant.Configuration, solutionConfiguration, "Toolchain"))
@@ -502,21 +535,70 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator, IWorkspaceG
     private static int SharedFragmentCount(ConfigurationKey left, ConfigurationKey right) =>
         left.Values.Count(value => right.Is(value));
 
-    private static string DisplayName(WorkspaceProjectVariant variant) =>
-        Presentation(variant.Configuration).DisplayName;
+    private static string DisplayName(
+        WorkspaceProjectVariant variant,
+        IReadOnlyDictionary<(string Target, string Configuration), string> configurationNames) =>
+        configurationNames[(variant.Target, variant.Configuration.Canonical)];
 
-    private static string Condition(WorkspaceProjectVariant variant) =>
-        Presentation(variant.Configuration).Condition;
-
-    private static ConfigurationPresentation Presentation(ConfigurationKey configuration)
+    private static string Condition(
+        WorkspaceProjectVariant variant,
+        IReadOnlyDictionary<(string Target, string Configuration), string> configurationNames)
     {
-        return ConfigurationPresentations.GetValue(configuration, static key =>
+        return $"'$(Configuration)|$(Platform)'=='{DisplayName(variant, configurationNames)}|x64'";
+    }
+
+    private static Dictionary<(string Target, string Configuration), string> ConfigurationNames(
+        WorkspaceModel workspace)
+    {
+        var variants = workspace.Projects
+            .SelectMany(project => project.Variants)
+            .GroupBy(variant => (variant.Target, variant.Configuration.Canonical))
+            .Select(group => group.First())
+            .ToImmutableArray();
+        var names = new Dictionary<(string Target, string Configuration), string>();
+
+        foreach (var group in variants.GroupBy(
+                     variant => BuildConfigurationNames.DisplayName(variant.Configuration),
+                     StringComparer.Ordinal))
         {
-            var displayName = BuildConfigurationNames.DisplayName(key);
-            return new ConfigurationPresentation(
-                displayName,
-                $"'$(Configuration)|$(Platform)'=='{displayName}|x64'");
-        });
+            var colliding = group
+                .OrderBy(variant => variant.Target, StringComparer.Ordinal)
+                .ThenBy(variant => variant.Configuration)
+                .ToImmutableArray();
+            if (colliding.Length == 1)
+            {
+                var variant = colliding[0];
+                names.Add((variant.Target, variant.Configuration.Canonical), group.Key);
+                continue;
+            }
+
+            var targetsDiffer = colliding.Select(variant => variant.Target)
+                .Distinct(StringComparer.Ordinal)
+                .Count() > 1;
+            var differingFragments = colliding
+                .SelectMany(variant => variant.Configuration.Values.Select(value => value.Fragment))
+                .Distinct()
+                .Where(fragment => colliding
+                    .Select(variant => variant.Configuration.TryGet(fragment, out var value) ? value.Value : null)
+                    .Distinct(StringComparer.Ordinal)
+                    .Count() > 1)
+                .Order()
+                .ToImmutableArray();
+            foreach (var variant in colliding)
+            {
+                var qualifiers = new List<string>(differingFragments.Length + (targetsDiffer ? 1 : 0));
+                if (targetsDiffer) qualifiers.Add($"Target={variant.Target}");
+                qualifiers.AddRange(differingFragments.Select(fragment =>
+                    variant.Configuration.TryGet(fragment, out var value)
+                        ? $"{fragment.Value}={value.Value}"
+                        : $"{fragment.Value}=None"));
+                names.Add(
+                    (variant.Target, variant.Configuration.Canonical),
+                    $"{group.Key} ({string.Join(", ", qualifiers)})");
+            }
+        }
+
+        return names;
     }
 
     private static string Fragment(ConfigurationKey key, string fragment) =>
@@ -532,23 +614,7 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator, IWorkspaceG
         _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, null),
     };
 
-    private static string ProjectFileStem(WorkspaceProject project)
-    {
-        var name = project.Name.EndsWith("Module", StringComparison.Ordinal)
-            ? project.Name[..^"Module".Length]
-            : project.Name;
-        var validCharacters = name.Count(character => char.IsLetterOrDigit(character) || character is '_' or '.');
-        if (validCharacters == 0) return ToPascalCase(project.Id);
-        if (validCharacters == name.Length) return name;
-
-        return string.Create(validCharacters, name, static (destination, value) =>
-        {
-            var index = 0;
-            foreach (var character in value)
-                if (char.IsLetterOrDigit(character) || character is '_' or '.')
-                    destination[index++] = character;
-        });
-    }
+    private static string ProjectFileStem(WorkspaceProject project) => ToPascalCase(project.Id);
 
     private static string ToPascalCase(string value) => string.Concat(value
         .Split(['-', '_', '.'], StringSplitOptions.RemoveEmptyEntries)
@@ -670,9 +736,7 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator, IWorkspaceG
 
     private static string Normalize(string value) => value.Replace("\r\n", "\n", StringComparison.Ordinal);
 
-    private sealed record SolutionConfiguration(string Name, ConfigurationKey Key);
-
-    private sealed record ConfigurationPresentation(string DisplayName, string Condition);
+    private sealed record SolutionConfiguration(string Name, string Target, ConfigurationKey Key);
 
     private sealed record SourceVariantGroup(
         LogicalPath Source,

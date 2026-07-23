@@ -25,18 +25,18 @@ public sealed class WindowsGameWorkspaceEndToEndTests
         var generatedRoot = Path.Combine(workspace.Path, ".roxy", "generated", "Vs2022", "Game");
         var solution = File.ReadAllText(Path.Combine(generatedRoot, "GameWorkspace.sln"));
         Assert.Contains("Project(\"{", solution, StringComparison.Ordinal);
-        Assert.Contains("= \"Game\", \"Game.vcxproj\"", solution, StringComparison.Ordinal);
-        Assert.Contains("= \"Editor\", \"Editor.vcxproj\"", solution, StringComparison.Ordinal);
-        Assert.Contains("Shipping DedicatedServer-", solution, StringComparison.Ordinal);
-        Assert.Contains("Release Editor-", solution, StringComparison.Ordinal);
-        Assert.DoesNotContain("Shipping Editor-", solution, StringComparison.Ordinal);
-        Assert.Equal(8, Directory.GetFiles(generatedRoot, "*.vcxproj").Length);
+        Assert.Contains("= \"GameExecutable\", \"GameExecutable.vcxproj\"", solution, StringComparison.Ordinal);
+        Assert.Contains("= \"EditorExecutable\", \"EditorExecutable.vcxproj\"", solution, StringComparison.Ordinal);
+        Assert.Contains("Shipping DedicatedServer|Win64", solution, StringComparison.Ordinal);
+        Assert.Contains("Release Editor|Win64", solution, StringComparison.Ordinal);
+        Assert.DoesNotContain("Shipping Editor|Win64", solution, StringComparison.Ordinal);
+        Assert.Equal(5, Directory.GetFiles(generatedRoot, "*.vcxproj").Length);
 
-        var game = File.ReadAllText(Path.Combine(generatedRoot, "Game.vcxproj"));
-        var editor = File.ReadAllText(Path.Combine(generatedRoot, "Editor.vcxproj"));
-        var core = File.ReadAllText(Path.Combine(generatedRoot, "EngineCore.Game.vcxproj"));
-        var runtime = File.ReadAllText(Path.Combine(generatedRoot, "EngineRuntime.Game.vcxproj"));
-        var headers = File.ReadAllText(Path.Combine(generatedRoot, "EngineHeaders.Game.vcxproj"));
+        var game = File.ReadAllText(Path.Combine(generatedRoot, "GameExecutable.vcxproj"));
+        var editor = File.ReadAllText(Path.Combine(generatedRoot, "EditorExecutable.vcxproj"));
+        var core = File.ReadAllText(Path.Combine(generatedRoot, "EngineCore.vcxproj"));
+        var runtime = File.ReadAllText(Path.Combine(generatedRoot, "EngineRuntime.vcxproj"));
+        var headers = File.ReadAllText(Path.Combine(generatedRoot, "EngineHeaders.vcxproj"));
 
         Assert.Contains(@"Game\Main.cpp", game, StringComparison.OrdinalIgnoreCase);
         Assert.Contains(@"Editor\Main.cpp", editor, StringComparison.OrdinalIgnoreCase);
@@ -103,8 +103,7 @@ public sealed class WindowsGameWorkspaceEndToEndTests
         Assert.Equal(0, buildExitCode);
         var arguments = File.ReadAllLines(Path.Combine(workspace.Path, ".roxy", "fake-msbuild.args"));
         Assert.EndsWith("GameWorkspace.GameTarget.Build.sln", arguments[0], StringComparison.Ordinal);
-        Assert.Contains(arguments, argument =>
-            argument.StartsWith("/p:Configuration=Development DedicatedServer-", StringComparison.Ordinal));
+        Assert.Contains("/p:Configuration=Development DedicatedServer", arguments);
         Assert.Contains("/p:Platform=Win64", arguments);
     }
 

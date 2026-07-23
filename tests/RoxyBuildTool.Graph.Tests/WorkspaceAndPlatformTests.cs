@@ -10,7 +10,7 @@ namespace RoxyBuildTool.Graph.Tests;
 public sealed class WorkspaceAndPlatformTests
 {
     [Fact]
-    public void WorkspaceAssemblyGroupsVariantsAndNamesProjects()
+    public void WorkspaceAssemblyGroupsOneProjectPerModuleAcrossTargetsAndConfigurations()
     {
         var debug = DependencyResolverBoundaryTests.Configuration("debug");
         var development = DependencyResolverBoundaryTests.Configuration();
@@ -21,35 +21,39 @@ public sealed class WorkspaceAndPlatformTests
             Sources = [new("development.cpp")],
             Dependencies = [new("core", DependencyVisibility.Public)],
         };
+        var editor = Configured("editor", "EditorExecutableModule", ModuleKind.Executable) with
+        {
+            Dependencies = [new("core", DependencyVisibility.Private)],
+        };
         var configuredGraphs = new[]
         {
             new ConfiguredGraph(development, new("game", "GameTarget", ["game"]), [gameDevelopment, dependency], []),
             new ConfiguredGraph(debug, new("game", "GameTarget", ["game"]), [gameDebug, dependency], []),
+            new ConfiguredGraph(development, new("editor", "EditorTarget", ["editor"]), [editor, dependency], []),
         };
         var actionGraphs = new[]
         {
             new ActionGraph(development, "game", [], []),
             new ActionGraph(debug, "game", [], []),
+            new ActionGraph(development, "editor", [], []),
         };
-        var definition = new WorkspaceDefinition("workspace", "Workspace", ["game"], "game");
+        var definition = new WorkspaceDefinition("workspace", "Workspace", ["editor", "game"], "game");
 
         var workspace = WorkspaceAssembler.Assemble(definition, configuredGraphs, actionGraphs);
 
         Assert.Equal("Workspace", workspace.Name);
         Assert.Equal("game", workspace.StartupTarget);
-        Assert.Equal(["Game.Core", "Game.Game"], workspace.Projects.Select(project => project.Id));
-        var game = workspace.Projects.Single(project => project.Id == "Game.Game");
-        Assert.Equal("Game", game.Name);
+        Assert.Equal(["core", "editor", "game"], workspace.Projects.Select(project => project.Id));
+        var game = workspace.Projects.Single(project => project.Id == "game");
         Assert.Equal(2, game.Variants.Length);
-        Assert.Equal(["Game.Core"], game.ProjectDependencies);
-        var dependencyVariant = Assert.Single(game.DependencyVariants);
-        Assert.Equal(development, dependencyVariant.Configuration);
-        Assert.Equal("Game.Core", dependencyVariant.ProjectId);
-        var core = workspace.Projects.Single(project => project.Id == "Game.Core");
-        Assert.Equal("Core.Game", core.Name);
-        Assert.Equal(["Debug", "Development"],
+        var core = workspace.Projects.Single(project => project.Id == "core");
+        Assert.Equal(["editor", "game", "game"], core.Variants.Select(variant => variant.Target));
+        Assert.Equal(["Development", "Debug", "Development"],
+            core.Variants.Select(variant => Profile(variant.Configuration)));
+        Assert.Equal(["Development", "Debug", "Development"],
             workspace.ConfiguredGraphs.Select(graph => Profile(graph.Configuration)));
-        Assert.Equal(["Debug", "Development"], workspace.ActionGraphs.Select(graph => Profile(graph.Configuration)));
+        Assert.Equal(["Development", "Debug", "Development"],
+            workspace.ActionGraphs.Select(graph => Profile(graph.Configuration)));
     }
 
     [Fact]
@@ -62,7 +66,9 @@ public sealed class WorkspaceAndPlatformTests
 
         var workspace = WorkspaceAssembler.Assemble(definition, [graph], []);
 
-        Assert.Equal("Plain", Assert.Single(workspace.Projects).Name);
+        var project = Assert.Single(workspace.Projects);
+        Assert.Equal("plain", project.Id);
+        Assert.Equal("Plain", Assert.Single(project.Variants).Module.DisplayName);
     }
 
     [Fact]
