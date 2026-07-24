@@ -595,7 +595,7 @@ public class ModuleRules
             CxxOutput.Executable => ModuleKind.Executable,
             _ => throw new InvalidOperationException($"Unsupported C++ output kind '{Output}'."),
         },
-        ExpandSources(),
+        ExpandSources(type),
         Public.Build(BuildRegistry.DefinitionId(type), "public"),
         Private.Build(BuildRegistry.DefinitionId(type), "private"),
         _dependencies.Select(dependency =>
@@ -604,7 +604,7 @@ public class ModuleRules
         _conditionalRules.ToImmutableArray(),
         CxxSettings: Cxx.Build());
 
-    protected ImmutableArray<LogicalPath> ExpandSources()
+    protected ImmutableArray<LogicalPath> ExpandSources(Type type)
     {
         var result = new HashSet<string>(LogicalPath.FileSystemComparer);
         foreach (var (root, pattern) in _sourcePatterns)
@@ -626,7 +626,50 @@ public class ModuleRules
             }
         }
 
+        var ruleFile = FindRuleFile(type);
+        if (ruleFile is not null) result.Add(ruleFile);
         return result.Order(StringComparer.Ordinal).Select(path => new LogicalPath(path)).ToImmutableArray();
+    }
+
+    private string? FindRuleFile(Type type)
+    {
+        var workspaceRoot = Path.GetFullPath(_workspaceRoot);
+        var expectedName = $"{BuildRegistry.DefinitionId(type)}.Module.cs";
+        var matches = new HashSet<string>(LogicalPath.FileSystemComparer);
+        foreach (var root in _sourcePatterns.Select(pattern => pattern.Root)
+                     .Distinct(LogicalPath.FileSystemComparer))
+        {
+            var directory = new DirectoryInfo(Path.GetFullPath(root, workspaceRoot));
+            while (directory is not null && IsWithin(directory.FullName, workspaceRoot))
+            {
+                var candidate = Path.Combine(directory.FullName, expectedName);
+                if (File.Exists(candidate))
+                {
+                    matches.Add(Path.GetRelativePath(workspaceRoot, candidate).Replace('\\', '/'));
+                    break;
+                }
+
+                directory = directory.Parent;
+            }
+        }
+
+        return matches.Count switch
+        {
+            0 => null,
+            1 => matches.Single(),
+            _ => throw new InvalidOperationException(
+                $"Module '{BuildRegistry.DefinitionId(type)}' has multiple convention-matching rule files: " +
+                $"{string.Join(", ", matches.Order(StringComparer.Ordinal))}."),
+        };
+    }
+
+    private static bool IsWithin(string path, string root)
+    {
+        var relative = Path.GetRelativePath(root, path);
+        return !Path.IsPathRooted(relative) &&
+               (relative == "." ||
+                relative != ".." &&
+                !relative.StartsWith($"..{Path.DirectorySeparatorChar}", StringComparison.Ordinal));
     }
 
     private static bool Matches(string pattern, string relativePath)

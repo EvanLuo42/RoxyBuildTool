@@ -282,13 +282,42 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator, IWorkspaceG
         {
             StartMsBuild(writer, "Project");
             writer.WriteAttributeString("ToolsVersion", "4.0");
-            foreach (var group in Sources(project).GroupBy(NativeItemName, StringComparer.Ordinal))
+            var sources = Sources(project);
+            var filterRoot = CommonSourceRoot(sources);
+            var sourceFilters = sources.ToDictionary(
+                source => source.Value,
+                source => SourceFilter(source, filterRoot),
+                LogicalPath.FileSystemComparer);
+            var filters = sourceFilters.Values
+                .Where(filter => filter is not null)
+                .SelectMany(FilterHierarchy)
+                .Distinct(LogicalPath.FileSystemComparer)
+                .Order(StringComparer.Ordinal)
+                .ToImmutableArray();
+            if (!filters.IsEmpty)
+            {
+                StartMsBuild(writer, "ItemGroup");
+                foreach (var filter in filters)
+                {
+                    StartMsBuild(writer, "Filter");
+                    writer.WriteAttributeString("Include", ToWindows(filter));
+                    WriteMsBuild(writer, "UniqueIdentifier",
+                        $"{{{ProjectGuid($"filter:{project.Id}:{filter}").ToString().ToUpperInvariant()}}}");
+                    writer.WriteEndElement();
+                }
+
+                writer.WriteEndElement();
+            }
+
+            foreach (var group in sources.GroupBy(NativeItemName, StringComparer.Ordinal))
             {
                 StartMsBuild(writer, "ItemGroup");
                 foreach (var source in group)
                 {
                     StartMsBuild(writer, group.Key);
                     writer.WriteAttributeString("Include", ToWindows(RelativeFromOutput(context, source.Value)));
+                    if (sourceFilters[source.Value] is { } filter)
+                        WriteMsBuild(writer, "Filter", ToWindows(filter));
                     writer.WriteEndElement();
                 }
 
@@ -297,6 +326,43 @@ public sealed class VisualStudio2022Generator : IWorkspaceGenerator, IWorkspaceG
 
             writer.WriteEndElement();
         });
+    }
+
+    private static string CommonSourceRoot(ImmutableArray<LogicalPath> sources)
+    {
+        if (sources.IsEmpty) return string.Empty;
+        var directories = sources
+            .Select(source => source.Value.Split('/')[..^1])
+            .ToImmutableArray();
+        var commonLength = directories.Min(directory => directory.Length);
+        for (var index = 0; index < commonLength; index++)
+        {
+            var segment = directories[0][index];
+            if (directories.Any(directory =>
+                    !LogicalPath.FileSystemComparer.Equals(directory[index], segment)))
+                return string.Join('/', directories[0][..index]);
+        }
+
+        return string.Join('/', directories[0][..commonLength]);
+    }
+
+    private static string? SourceFilter(LogicalPath source, string root)
+    {
+        var directory = string.Join('/', source.Value.Split('/')[..^1]);
+        var relative = root.Length == 0
+            ? directory
+            : directory.Length == root.Length
+                ? string.Empty
+                : directory[(root.Length + 1)..];
+        return relative.Length == 0 ? null : relative;
+    }
+
+    private static IEnumerable<string> FilterHierarchy(string? filter)
+    {
+        if (filter is null) yield break;
+        var segments = filter.Split('/');
+        for (var length = 1; length <= segments.Length; length++)
+            yield return string.Join('/', segments[..length]);
     }
 
     private static void WriteProjectReferences(

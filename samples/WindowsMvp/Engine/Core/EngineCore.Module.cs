@@ -9,6 +9,7 @@ public sealed class EngineCoreModule : CxxModule
     {
         rules.Output = CxxOutput.StaticLibrary;
         rules.Sources.From("Engine/Core", "**/*.cpp");
+        rules.Sources.From("Engine/Core", "**/*.h");
         rules.Public.IncludeDirectories.Add("Engine/Core/Public");
         rules.Private.IncludeDirectories.Add("Engine/Core/Private");
         rules.Public.Defines.Add("ROXY_WITH_CORE=1");

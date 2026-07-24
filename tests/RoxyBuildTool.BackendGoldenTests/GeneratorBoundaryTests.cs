@@ -170,6 +170,48 @@ public sealed class GeneratorBoundaryTests
     }
 
     [Fact]
+    public void FiltersUseDirectoriesRelativeToTheModuleSourceRoot()
+    {
+        var configuration = Configuration(BuildProfiles.Development);
+        var module = Module("Core", "CoreModule", ModuleKind.StaticLibrary,
+        [
+            "Source/Core/Core.Module.cs",
+            "Source/Core/Private/Core.cpp",
+            "Source/Core/Private/Generated/Generated.cpp",
+            "Source/Core/Public/Core.h",
+        ]);
+        var model = new WorkspaceModel(
+            "Filters",
+            "Target",
+            [Project("Core", [new("Target", configuration, module)])],
+            [],
+            []);
+
+        var filters = Parse(Generator().Generate(model, Context("filters")), "Core.vcxproj.filters");
+        Assert.Equal(
+            ["Private", "Private\\Generated", "Public"],
+            filters.Descendants(MsBuild + "Filter")
+                .Where(element => element.Attribute("Include") is not null)
+                .Select(element => (string)element.Attribute("Include")!));
+
+        var items = filters.Descendants()
+            .Where(element => element.Attribute("Include") is not null &&
+                              element.Name != MsBuild + "Filter")
+            .ToArray();
+        Assert.Null(Item("Core.Module.cs").Element(MsBuild + "Filter"));
+        Assert.Equal("Private", Item("Core.cpp").Element(MsBuild + "Filter")?.Value);
+        Assert.Equal("Private\\Generated", Item("Generated.cpp").Element(MsBuild + "Filter")?.Value);
+        Assert.Equal("Public", Item("Core.h").Element(MsBuild + "Filter")?.Value);
+        Assert.All(
+            filters.Descendants(MsBuild + "Filter")
+                .Where(element => element.Attribute("Include") is not null),
+            filter => Assert.NotNull(filter.Element(MsBuild + "UniqueIdentifier")));
+
+        XElement Item(string fileName) => Assert.Single(items, element =>
+            ((string)element.Attribute("Include")!).EndsWith(fileName, StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void NativeGenerationKeepsConditionalReferencesAndToolchainPolicyPerVariant()
     {
         var debug = Configuration(BuildProfiles.Debug);

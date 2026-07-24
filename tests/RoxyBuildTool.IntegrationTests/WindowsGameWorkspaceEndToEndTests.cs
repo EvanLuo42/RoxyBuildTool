@@ -35,13 +35,18 @@ public sealed class WindowsGameWorkspaceEndToEndTests
         var game = File.ReadAllText(Path.Combine(generatedRoot, "GameExecutable.vcxproj"));
         var editor = File.ReadAllText(Path.Combine(generatedRoot, "EditorExecutable.vcxproj"));
         var core = File.ReadAllText(Path.Combine(generatedRoot, "EngineCore.vcxproj"));
+        var coreFilters = File.ReadAllText(Path.Combine(generatedRoot, "EngineCore.vcxproj.filters"));
         var runtime = File.ReadAllText(Path.Combine(generatedRoot, "EngineRuntime.vcxproj"));
         var headers = File.ReadAllText(Path.Combine(generatedRoot, "EngineHeaders.vcxproj"));
 
         Assert.Contains(@"Game\Main.cpp", game, StringComparison.OrdinalIgnoreCase);
         Assert.Contains(@"Editor\Main.cpp", editor, StringComparison.OrdinalIgnoreCase);
         Assert.Contains(@"Engine\Core\EngineCore.cpp", core, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(@"Engine\Core\EngineCore.Module.cs", core, StringComparison.OrdinalIgnoreCase);
         Assert.Contains(@"Engine\Core\Private", core, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("<Filter>Private</Filter>", coreFilters, StringComparison.Ordinal);
+        Assert.Contains("<Filter>Public</Filter>", coreFilters, StringComparison.Ordinal);
+        Assert.Contains("EngineCore.Module.cs", coreFilters, StringComparison.Ordinal);
         Assert.Contains("ROXY_DEDICATED_SERVER=1", core, StringComparison.Ordinal);
         Assert.Contains(@"Engine\Runtime\EngineRuntime.cpp", runtime, StringComparison.OrdinalIgnoreCase);
         Assert.Contains(@"Engine\Runtime\Public", runtime, StringComparison.OrdinalIgnoreCase);

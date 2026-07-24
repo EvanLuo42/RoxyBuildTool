@@ -13,5 +13,7 @@
               CopyToOutputDirectory="PreserveNewest"/>
         <None Include="../../samples/WindowsMvp/**/*.h" Link="WindowsGameWorkspaceFixture/%(RecursiveDir)%(Filename)%(Extension)"
               CopyToOutputDirectory="PreserveNewest"/>
+        <None Include="../../samples/WindowsMvp/**/*.Module.cs" Link="WindowsGameWorkspaceFixture/%(RecursiveDir)%(Filename)%(Extension)"
+              CopyToOutputDirectory="PreserveNewest"/>
   </ItemGroup>
 </Project>

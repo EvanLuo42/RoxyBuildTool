@@ -33,6 +33,7 @@ The Visual Studio generator writes:
 - `.vcxproj` and `.vcxproj.filters` files for C++ modules.
 
 The generated solution never contains C# projects, including the project-local rules host.
+Each module project includes its convention-named `<ModuleId>.Module.cs` file when it is located at or above a declared source root. Visual Studio filters mirror directories below the module's common source root, so directories such as `Private` and `Public` appear directly while the rule file remains at the project root.
 
 Human-readable solution configuration names are derived from the profile and custom fragments without exposing the internal hash. If two configurations would otherwise have the same name, readable fragment qualifiers distinguish them. Internal configuration identity remains the full canonical key.
 
